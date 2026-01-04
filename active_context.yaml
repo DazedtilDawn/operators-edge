@@ -31,6 +31,12 @@ plan:
   - description: "Fix prune_skill_hook tuple vs dict bug"
     status: completed
     proof: "v3.9.5 handles (mem, reason) tuples from identify_decayed_memory"
+  - description: "Create GitHub repo"
+    status: completed
+    proof: "https://github.com/DazedtilDawn/operators-edge"
+  - description: "Build Proof Visualizer v0.1"
+    status: completed
+    proof: "tools/proof_visualizer.py - 1441 entries, CTI=73.4%"
 
 # Completed work:
 # v1: YAML state, enforcement hooks, Windows packaging
