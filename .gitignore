@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/*.zip
+
+# Environment
+.env
+.env.*
+venv/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+._*
+
+# State files (local to each installation)
+.claude/state/
+.proof/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Keep dist folder structure but not ZIPs
+dist/*.zip

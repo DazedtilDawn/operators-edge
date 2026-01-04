@@ -1,0 +1,224 @@
+# Operator's Edge - Active Context
+# This file is mechanically validated. Structure matters.
+
+# Current session (updated by session_start hook)
+session:
+  id: "20251230-discovery-mode"
+  started_at: "2025-12-30T00:00:00"
+  note: "v3.9.3 Quality Gate complete - 1350 tests"
+
+# What are we trying to achieve?
+objective: "Prepare dist for Windows deployment"
+
+# Current position in the plan
+current_step: 1
+
+# The plan - each step must have description, status, and proof
+# Status: pending | in_progress | completed | blocked
+plan:
+  - description: "Update dist with all v3.9.3 modules"
+    status: completed
+    proof: "66 hooks, 11 commands copied to dist/operators-edge/"
+  - description: "Add UserPromptSubmit hooks to setup.py"
+    status: completed
+    proof: "setup.py updated with /edge and /edge-prune hooks"
+  - description: "Create v3.9.3 ZIP package"
+    status: completed
+    proof: "dist/operators-edge-v3.9.3.zip created (255KB)"
+  - description: "Fix Windows env var syntax ($VAR -> %VAR%)"
+    status: completed
+    proof: "v3.9.4 uses get_project_dir_var() for platform-specific syntax"
+  - description: "Fix prune_skill_hook tuple vs dict bug"
+    status: completed
+    proof: "v3.9.5 handles (mem, reason) tuples from identify_decayed_memory"
+
+# Completed work:
+# v1: YAML state, enforcement hooks, Windows packaging
+# v2: Smart orchestrator, 6-check loop, constant memory, pruning
+# v2.1: Research command system - scan, prompt generation, results tracking
+# v2.2: Brainstorm command - project scanning, 3-phase ideation, expert personas
+# v2.3: Pragmatic Layering refactor - edge_utils.py split into 6 focused modules (10 steps, score 5/6)
+# v2.4: Automated reflection - score patterns, recurring failures, improvement suggestions (8 steps, score 5/6)
+# v2.5: Lesson deduplication and consolidation (9 steps, score 5/6)
+# v2.6: YOLO Mode with Guardrails - reversibility-gated auto-execution (9 steps, score 6/6)
+# v2.7: Dispatch Mode - YOLO as autopilot with junction gates (7 steps)
+# v2.8: Scout Mode - autonomous codebase exploration when no objective (7 steps)
+# v3.0: Autonomous Edge - /edge unified command, continuous loop, complexity classification, auto-plan (7 steps)
+# v3.1: Discovery Mode - self-aware feature proposals from archive/lessons/patterns (6 steps)
+# v3.2: ClickUp Integration - auto-create tasks from objectives, sync completion status (5 steps)
+# v3.3: Discovery Filter - meta-lesson detection to reduce false positives (3 steps)
+# v3.4: Lesson Extraction - mismatch + trigger = lesson, auto-capture at resolution (4 steps)
+# v3.5: Risks Enforcement - mandatory failure mode planning before edits (5 steps)
+# v3.6: Lessons as Living Audits - lessons auto-scan codebase for violations (7 steps, 961 tests)
+# v3.7: Three Gears Mode - automatic mode switching (Active→Patrol→Dream) (8 steps, 1011 tests, score 6/6)
+# v3.8: Gear Integration - /edge skill now executes Three Gears logic, 1251 tests
+# v3.8.1: Architecture Review - identified skill-as-documentation vs hook-based execution gap
+# v3.9: Hook-Based Gear Execution - UserPromptSubmit hook calls gear_engine, 1283 tests
+# v3.9.1: Hook-Based Prune - /edge-prune now triggers prune_skill_hook.py via UserPromptSubmit, 1307 tests
+# v3.9.2: Verification Field - optional verification on plan steps, PATROL flags unverified completions, 1321 tests
+# v3.9.3: Quality Gate - objective completion checks before ACTIVE→PATROL transition, 1350 tests
+
+# Hard constraints - things that must not happen
+constraints: []
+
+# Known risks and how we're mitigating them
+risks: []
+
+# Memory (lessons with reinforcement tracking)
+memory:
+  - trigger: "hooks"
+    lesson: "Policy is not enforcement - hooks are enforcement"
+    reinforced: 4
+    last_used: "2026-01-03"
+  - trigger: "state change"
+    lesson: "Hash comparison verifies actual change, not just existence"
+    reinforced: 2
+    last_used: "2025-12-28"
+  - trigger: "claude code"
+    lesson: "Custom subagents work via .claude/agents/ (since v1.0.60) - use /agents to create"
+    reinforced: 1
+    last_used: "2026-01-03"
+  - trigger: "paths"
+    lesson: "pathlib.Path handles cross-platform paths correctly"
+    reinforced: 3
+    last_used: "2025-12-30"
+  - trigger: "commands"
+    lesson: "Claude Code commands require restart to load after installation"
+    reinforced: 2
+    last_used: "2025-12-28"
+  - trigger: "python"
+    lesson: "Windows uses 'python', Mac uses 'python3' - setup script handles this"
+    reinforced: 3
+    last_used: "2025-12-30"
+  - trigger: "windows transfer"
+    lesson: "Dotfiles (.claude/) don't copy to Windows by default - use ZIP"
+    reinforced: 2
+    last_used: "2025-12-27"
+  - trigger: "loop"
+    lesson: "Enforcement ensures loop runs; adaptation makes loop intelligent"
+    reinforced: 2
+    last_used: "2025-12-28"
+  - trigger: "commands"
+    lesson: "Single entry point (/edge) reduces cognitive load vs multiple commands"
+    reinforced: 2
+    last_used: "2025-12-28"
+  - trigger: "memory"
+    lesson: "Memory is taste, not storage - learn what to keep vs discard"
+    reinforced: 2
+    last_used: "2025-12-28"
+  - trigger: "archive"
+    lesson: "Resolved = archived; only living context stays in active state"
+    reinforced: 3
+    last_used: "2025-12-30"
+  - trigger: "memory"
+    lesson: "Constant memory by construction beats unbounded growth"
+    reinforced: 2
+    last_used: "2025-12-28"
+  - trigger: "research"
+    lesson: "External handoff beats internal pretending - generate prompts for tools that do it better"
+    reinforced: 2
+    last_used: "2025-12-28"
+  - trigger: "refactoring"
+    lesson: "Facade pattern enables refactoring without breaking consumers - re-export everything"
+    reinforced: 3
+    last_used: "2025-12-30"
+  - trigger: "imports"
+    lesson: "Absolute imports (not relative) work when hooks use sys.path.insert"
+    reinforced: 2
+    last_used: "2025-12-28"
+  - trigger: "dedup"
+    lesson: "Theme-based similarity catches semantic duplicates that string matching misses"
+    reinforced: 2
+    last_used: "2025-12-28"
+  - trigger: "yolo"
+    lesson: "Reversibility-gating provides safety without friction - auto-execute reversible, stage irreversible, block dangerous"
+    reinforced: 2
+    last_used: "2025-12-28"
+  - trigger: "classification"
+    lesson: "Classification order matters - check blocked first, then auto patterns, then supervised"
+    reinforced: 2
+    last_used: "2025-12-28"
+  - trigger: "yolo"
+    lesson: "Pre-tool hooks can return early with 'approve' for YOLO bypass, but hard blocks must be checked first"
+    reinforced: 2
+    last_used: "2025-12-28"
+  - trigger: "skills"
+    lesson: "Skill files cache at session start - changes require restart to take effect"
+    reinforced: 2
+    last_used: "2025-12-28"
+  - trigger: "complexity"
+    lesson: "Extract helpers until main function reads like an outline - each check returns early or delegates"
+    reinforced: 1
+    last_used: "2025-12-30"
+  - trigger: "research"
+    lesson: "Always copy research prompts to clipboard with pbcopy after creating them"
+    reinforced: 1
+    last_used: "2025-12-30"
+  - trigger: "lesson capture + timing"
+    lesson: "Capture lessons at resolution (understanding moment), not at scoring (recall moment)"
+    reinforced: 1
+    last_used: "2026-01-03"
+  - trigger: "enforcement + behavioral"
+    lesson: "Mechanical enforcement beats behavioral protocol - embed in existing flows, don't add new rituals"
+    reinforced: 1
+    last_used: "2026-01-03"
+  - trigger: "gear + mode switching"
+    lesson: "State detection determines gear, transitions are events - separate 'what mode' from 'how to switch'"
+    reinforced: 1
+    last_used: "2026-01-03"
+  - trigger: "autonomous + rate limit"
+    lesson: "Rate limit autonomous features by session (max N) not by time to prevent spam without blocking"
+    reinforced: 1
+    last_used: "2026-01-03"
+  - trigger: "three gears + operational modes"
+    lesson: "Active→Patrol→Dream provides natural idle progression - doing→checking→thinking mirrors productive work cycles"
+    reinforced: 1
+    last_used: "2026-01-03"
+  - trigger: "skills + architecture"
+    lesson: "Skills are prompts Claude interprets, not code Claude executes - for mechanical enforcement, hooks must call Python modules"
+    reinforced: 2
+    last_used: "2026-01-03"
+  - trigger: "quality gate + transitions"
+    lesson: "Quality gates belong at state transitions, not session end - gate the behavior change, not the exit"
+    reinforced: 1
+    last_used: "2026-01-03"
+  - trigger: "severity + blocking"
+    lesson: "Errors block, warnings inform - severity determines whether to halt or notify"
+    reinforced: 1
+    last_used: "2026-01-03"
+  - trigger: "lessons + stale + outdated"
+    lesson: "Challenge lessons older than 7 days when relevant - tools and APIs change"
+    reinforced: 1
+    last_used: "2026-01-03"
+
+
+# Self-assessment
+self_score:
+  timestamp: "2026-01-03T17:30:00"
+  checks:
+    mismatch_detection:
+      met: true
+      note: "Caught stale subagents lesson when challenged, corrected immediately"
+    plan_revision:
+      met: true
+      note: "Reframed score-hook to quality-gate when user clarified intent"
+    tool_switching:
+      met: true
+      note: "N/A - no tool failures this session"
+    memory_update:
+      met: true
+      note: "Corrected stale Claude Code lesson about subagents"
+    proof_generation:
+      met: true
+      note: "1321→1350 tests, web sources cited, test output shown"
+    stop_condition:
+      met: true
+      note: "Presented bounded A/B/C options for quality gate approach"
+  total: 6
+  level: "real_agent"
+
+# Archive reference
+archive:
+  path: ".proof/archive.jsonl"
+  last_prune: "2026-01-03T15:00:00"
+  entries_archived: 133

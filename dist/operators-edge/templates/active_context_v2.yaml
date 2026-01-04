@@ -1,0 +1,108 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# OPERATOR'S EDGE v2 - ACTIVE CONTEXT TEMPLATE
+# Copy this to your project as active_context.yaml
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Session metadata (auto-managed by hooks)
+session:
+  id: null
+  started_at: null
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OBJECTIVE
+# ─────────────────────────────────────────────────────────────────────────────
+objective: "Set your objective here"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PLAN (only active steps - completed ones get archived)
+# ─────────────────────────────────────────────────────────────────────────────
+current_step: 0
+
+plan: []
+# Example step structure:
+#  - description: "What to do"
+#    status: pending
+#    expected: "What success looks like"
+#    actual: null
+#    delta: null
+#    proof: null
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OPEN QUESTIONS
+# ─────────────────────────────────────────────────────────────────────────────
+open_questions: []
+# Example:
+#  - question: "Which database should we use?"
+#    blocking: true
+#    context: "Need to decide before step 2"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONSTRAINTS
+# ─────────────────────────────────────────────────────────────────────────────
+constraints:
+  - "No destructive operations without confirmation"
+  - "All work must be provable"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NEXT ACTION
+# ─────────────────────────────────────────────────────────────────────────────
+next_action: null
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MISMATCHES (unresolved only - resolved ones get archived)
+# ─────────────────────────────────────────────────────────────────────────────
+mismatches: []
+# Example:
+#  - id: "mismatch-001"
+#    step: 1
+#    timestamp: "2025-01-15T10:00:00"
+#    expectation: "File exists"
+#    observation: "File not found"
+#    delta: "File was deleted externally"
+#    suspected_cause: "Another process cleaned temp files"
+#    confidence: 0.7
+#    resolved: false
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MEMORY (trigger-linked lessons)
+# ─────────────────────────────────────────────────────────────────────────────
+memory: []
+# Example:
+#  - trigger: "Permission denied on /etc"
+#    lesson: "Use sudo or request elevated access"
+#    applies_to: ["file operations", "system config"]
+#    reinforced: 2
+#    last_used: "2025-01-15"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RISKS
+# ─────────────────────────────────────────────────────────────────────────────
+risks: []
+# Example:
+#  - risk: "API rate limits"
+#    mitigation: "Add exponential backoff"
+#    status: active
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SELF SCORE (filled at checkpoints and session end)
+# ─────────────────────────────────────────────────────────────────────────────
+self_score: null
+# Filled by /edge-score:
+#  timestamp: "..."
+#  checks:
+#    mismatch_detection: {met: true, note: "..."}
+#    plan_revision: {met: true, note: "..."}
+#    tool_switching: {met: false, note: "N/A"}
+#    memory_update: {met: true, note: "..."}
+#    proof_generation: {met: true, note: "..."}
+#    stop_condition: {met: true, note: "..."}
+#  total: 5
+#  level: "real_agent"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ARCHIVE REFERENCE
+# ─────────────────────────────────────────────────────────────────────────────
+archive:
+  path: ".proof/archive.jsonl"
+  last_prune: null
+  entries_archived: 0
