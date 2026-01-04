@@ -260,17 +260,68 @@ def generate_html(timeline: List[Dict], graph: Dict, stats: Dict) -> str:
 </html>'''
 
 
+def load_cti_history(history_path: Path) -> List[Dict]:
+    """Load CTI history from CSV."""
+    if not history_path.exists():
+        return []
+    history = []
+    with open(history_path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('timestamp'):  # skip header
+                parts = line.split(',')
+                if len(parts) >= 4:
+                    history.append({
+                        'timestamp': parts[0],
+                        'events': int(parts[1]),
+                        'cti': float(parts[2]),
+                        'success_rate': float(parts[3]),
+                    })
+    return history
+
+
+def append_cti_history(history_path: Path, stats: Dict):
+    """Append current stats to CTI history."""
+    is_new = not history_path.exists()
+    with open(history_path, 'a') as f:
+        if is_new:
+            f.write('timestamp,events,cti,success_rate\n')
+        cti_val = float(stats['cti'].rstrip('%'))
+        sr_val = float(stats['success_rate'].rstrip('%')) if stats['success_rate'] != 'N/A' else 0
+        f.write(f"{datetime.now().isoformat()},{stats['total_events']},{cti_val},{sr_val}\n")
+
+
+def check_drift(history: List[Dict], current_cti: float, threshold: float = 10.0) -> Optional[str]:
+    """Check if CTI has drifted beyond threshold from last run."""
+    if not history:
+        return None
+    last_cti = history[-1]['cti']
+    drift = last_cti - current_cti
+    if drift > threshold:
+        return f"WARNING: CTI drift {drift:.1f}% (was {last_cti:.1f}%, now {current_cti:.1f}%)"
+    elif drift > 0:
+        return f"CTI down {drift:.1f}% from last run"
+    elif drift < 0:
+        return f"CTI up {-drift:.1f}% from last run"
+    return None
+
+
 def main():
     # Parse args
     args = sys.argv[1:]
     log_path = Path('.proof/session_log.jsonl')
     out_path = Path('proof_viz.html')
+    history_path = Path('.proof/cti_history.csv')
+    track_history = False
 
     i = 0
     while i < len(args):
         if args[i] == '--out' and i + 1 < len(args):
             out_path = Path(args[i + 1])
             i += 2
+        elif args[i] == '--history':
+            track_history = True
+            i += 1
         elif not args[i].startswith('-'):
             log_path = Path(args[i])
             i += 1
@@ -289,7 +340,17 @@ def main():
     graph = build_dependency_graph(entries)
     stats = compute_stats(entries)
 
+    cti_val = float(stats['cti'].rstrip('%'))
     print(f"Stats: {stats['total_events']} events, {stats['success_rate']} success, CTI={stats['cti']}")
+
+    # Drift detection
+    if track_history:
+        history = load_cti_history(history_path)
+        drift_msg = check_drift(history, cti_val)
+        if drift_msg:
+            print(f"Drift: {drift_msg}")
+        append_cti_history(history_path, stats)
+        print(f"History: {len(history) + 1} runs tracked in {history_path}")
 
     html = generate_html(timeline, graph, stats)
     out_path.write_text(html)
