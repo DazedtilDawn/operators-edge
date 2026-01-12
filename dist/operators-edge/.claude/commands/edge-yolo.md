@@ -12,6 +12,7 @@ Run /edge commands automatically until the objective is complete, stopping only 
 @active_context.yaml
 
 Read dispatch state from `.claude/state/dispatch_state.json` if it exists.
+Junction source of truth is `.claude/state/junction_state.json` (dispatch mirrors a subset).
 
 ## Commands
 

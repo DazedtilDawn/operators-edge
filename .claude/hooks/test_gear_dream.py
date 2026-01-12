@@ -472,8 +472,8 @@ class TestShouldTransitionFromDream:
         )
         gear_state = make_gear_state()
         should, transition = should_transition_from_dream(result, gear_state)
-        # Still transitions even with error (no proposal)
-        assert should is True
+        assert should is False
+        assert transition is None
 
 
 # =============================================================================

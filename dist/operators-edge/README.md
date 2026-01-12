@@ -68,6 +68,18 @@ cd C:\path\to\your\project
 python C:\path\to\operators-edge\setup.py
 ```
 
+**Windows verification checklist**
+1. Confirm files were created:
+   - `.claude\settings.json`
+   - `.claude\hooks\`
+   - `.claude\commands\`
+   - `active_context.yaml` (if missing before)
+2. Open `.claude\settings.json` and verify:
+   - Python command is `python` (not `python3`)
+3. Restart Claude Code and run:
+   - `/edge-context`
+   - `/edge-plan` (if no objective yet)
+
 ### macOS / Linux
 
 ```bash
@@ -112,6 +124,22 @@ python3 /path/to/operators-edge/setup.py
 6. **Review staged actions** - `/edge-yolo approve` to batch approve edits
 7. **On mismatch** - Run `/edge-mismatch`, then `/edge-adapt`
 8. **Before ending** - Run `/edge-prune` to archive, `/edge-score` to assess
+
+## Release / Dist Sync
+
+`dist/operators-edge` is a generated artifact and should not be edited directly.
+
+Before releasing or distributing:
+
+```bash
+# 1) Check for drift (fails if dist differs from source)
+python3 tools/build_dist.py --check
+
+# 2) Regenerate dist if needed
+python3 tools/build_dist.py
+```
+
+If `--check` reports mismatches, re-run the build and re-check.
 
 ## YOLO Mode
 

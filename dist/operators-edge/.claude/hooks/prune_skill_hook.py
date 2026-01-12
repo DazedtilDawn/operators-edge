@@ -11,6 +11,7 @@ Triggered by: UserPromptSubmit (matcher: "/edge-prune")
 import json
 import os
 import sys
+import subprocess
 from pathlib import Path
 from datetime import datetime
 
@@ -91,8 +92,13 @@ def format_prune_report(state: dict, prune_plan: dict) -> str:
     prunable_steps = prune_plan.get("steps", [])
     if prunable_steps:
         lines.append(f"Steps to archive: {len(prunable_steps)}")
-        for step in prunable_steps[:5]:
-            desc = step.get("description", "Unknown step")[:40]
+        for item in prunable_steps[:5]:
+            # Handle tuple (index, step) format from identify_prunable_steps
+            if isinstance(item, tuple):
+                idx, step = item
+            else:
+                step = item
+            desc = step.get("description", "Unknown step")[:40] if isinstance(step, dict) else str(step)[:40]
             lines.append(f"  - {desc}...")
         if len(prunable_steps) > 5:
             lines.append(f"  ... and {len(prunable_steps) - 5} more")
@@ -179,10 +185,14 @@ def execute_prune(state: dict, prune_plan: dict) -> dict:
     }
 
     # Archive completed steps
-    for step_info in prune_plan.get("steps", []):
+    for item in prune_plan.get("steps", []):
         try:
-            step = step_info.get("step", step_info)
-            step_num = step_info.get("index", 0)
+            # Handle tuple (index, step) format from identify_prunable_steps
+            if isinstance(item, tuple):
+                step_num, step = item
+            else:
+                step = item.get("step", item) if isinstance(item, dict) else item
+                step_num = item.get("index", 0) if isinstance(item, dict) else 0
             archive_completed_step(step, step_num, objective, session_id)
             results["steps_archived"] += 1
         except Exception as e:
@@ -268,7 +278,58 @@ def handle_prune() -> str:
         results = execute_prune(state, prune_plan)
         report += format_prune_results(results)
 
+        # Run Edge Loop after successful prune (non-blocking)
+        report += run_edge_loop()
+
     return report
+
+
+def run_edge_loop() -> str:
+    """
+    Run edge_loop.sh after prune to close the feedback loop.
+    Non-blocking: failures are logged but don't stop the prune.
+    """
+    lines = ["", "-" * 70, "EDGE LOOP", "-" * 70]
+
+    try:
+        # Find the edge_loop.sh script
+        script_path = Path(__file__).parent.parent.parent / "tools" / "edge_loop.sh"
+        if not script_path.exists():
+            lines.append("Edge Loop script not found - skipping")
+            return "\n".join(lines)
+
+        # Run the script (with subprocess timeout)
+        result = subprocess.run(
+            ["bash", str(script_path)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=str(script_path.parent.parent),
+        )
+
+        if result.returncode == 0:
+            lines.append("Edge Loop completed successfully")
+            # Extract key info from output
+            for line in result.stdout.split("\n"):
+                if "CTI" in line or "Saved to" in line:
+                    lines.append(f"  {line.strip()}")
+        else:
+            lines.append(f"Edge Loop exited with code {result.returncode}")
+            if result.stderr:
+                lines.append(f"  Error: {result.stderr[:100]}")
+
+    except subprocess.TimeoutExpired:
+        lines.append("Edge Loop timed out (60s) - skipped")
+    except Exception as e:
+        lines.append(f"Edge Loop error: {e}")
+        # Log to file for debugging
+        log_path = Path(__file__).parent.parent.parent / ".proof" / "edge_loop.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_path, "a") as f:
+            f.write(f"{datetime.now().isoformat()} - Error: {e}\n")
+
+    lines.append("-" * 70)
+    return "\n".join(lines)
 
 
 def main():

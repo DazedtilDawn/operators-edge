@@ -91,13 +91,25 @@ def run_patrol_scan(
             if f.type == FindingType.LESSON_VIOLATION
         )
 
-        duration = time.time() - start_time
-
         # Determine recommended action
         recommendation = None
         if surfaced:
             top = surfaced[0]
             recommendation = f"Select finding: {top.title[:40]}"
+
+        duration = time.time() - start_time
+
+        # Enforce scan timeout (soft fail with error)
+        if duration > PATROL_LIMITS["scan_timeout_seconds"]:
+            return PatrolGearResult(
+                scan_completed=False,
+                findings_count=len(surfaced),
+                findings=[_finding_to_dict(f) for f in surfaced],
+                lesson_violations=lesson_violations,
+                scan_duration_seconds=round(duration, 2),
+                recommended_action=recommendation,
+                error=f"Scan exceeded timeout ({PATROL_LIMITS['scan_timeout_seconds']}s)",
+            )
 
         return PatrolGearResult(
             scan_completed=True,
@@ -221,6 +233,10 @@ def should_transition_from_patrol(
     Returns:
         (should_transition, transition_type)
     """
+    # Do not transition on patrol errors
+    if result.error or not result.scan_completed:
+        return False, None
+
     # Found actionable findings -> go to Active (via finding selection)
     if result.findings_count > 0:
         return True, GearTransition.PATROL_TO_ACTIVE

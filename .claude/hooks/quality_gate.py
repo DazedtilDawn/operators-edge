@@ -223,6 +223,83 @@ def check_verifications_tested(
     )
 
 
+def check_eval_gate(state: Dict[str, Any]) -> QualityCheck:
+    """
+    Eval gate: warn or block if evals are enabled and failures exist.
+
+    v3.9.8: Enforcement at level >= 1 when gate_on_fail is true.
+    - Level 1: Warn by default, block if gate_on_fail=true
+    - Level 2: Stricter checks with task bank support
+
+    Blocking behavior:
+    - passed=True: No failures or gate not active
+    - passed=False + severity=warning: Failures exist but warn-only
+    - passed=False + severity=error: Failures exist and gate_on_fail=true (blocks)
+    """
+    try:
+        from edge_utils import get_evals_config, auto_triage, load_eval_runs
+    except Exception:
+        return QualityCheck(
+            name="eval_gate",
+            passed=True,
+            message="Eval gate unavailable",
+        )
+
+    evals_config = get_evals_config(state)
+    if not evals_config.get("enabled", True):
+        return QualityCheck(name="eval_gate", passed=True, message="Evals disabled")
+
+    if evals_config.get("mode") != "manual":
+        evals_config, _triage = auto_triage(state, evals_config, None)
+
+    level = evals_config.get("level", 0)
+    gate_on_fail = evals_config.get("policy", {}).get("gate_on_fail", False)
+
+    # Level 0: No gate active
+    if level < 1:
+        return QualityCheck(
+            name="eval_gate",
+            passed=True,
+            message="Eval gate not active (level 0)",
+        )
+
+    # Level 1+: Check for failures
+    runs = load_eval_runs(max_lines=500)
+    if not runs:
+        # No runs = no failures to check
+        return QualityCheck(
+            name="eval_gate",
+            passed=True,
+            message="No eval runs to check",
+        )
+
+    failed = [r for r in runs if r.get("invariants_failed")]
+    if failed:
+        # Determine severity based on gate_on_fail policy
+        if gate_on_fail:
+            # Blocking mode: error severity means passed=False blocks transition
+            return QualityCheck(
+                name="eval_gate",
+                passed=False,
+                severity="error",
+                message=f"{len(failed)} eval run(s) with failed invariants - blocking transition",
+            )
+        else:
+            # Warn-only mode: warn but don't block
+            return QualityCheck(
+                name="eval_gate",
+                passed=False,
+                severity="warning",
+                message=f"{len(failed)} eval run(s) with failed invariants",
+            )
+
+    return QualityCheck(
+        name="eval_gate",
+        passed=True,
+        message="Eval gate passed",
+    )
+
+
 def check_no_unresolved_mismatches(state: Dict[str, Any]) -> QualityCheck:
     """
     Check that there are no unresolved mismatches.
@@ -305,6 +382,7 @@ def run_quality_gate(
     checks.append(check_no_dangling_in_progress(state))
     checks.append(check_verifications_tested(state, project_dir))
     checks.append(check_no_unresolved_mismatches(state))
+    checks.append(check_eval_gate(state))
 
     # Categorize results
     failed = [c for c in checks if not c.passed and c.severity == "error"]

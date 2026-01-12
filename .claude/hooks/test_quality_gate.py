@@ -392,8 +392,8 @@ class TestRunQualityGate(unittest.TestCase):
         }
         result = run_quality_gate(state)
         self.assertFalse(result.passed)
-        # Should have 3 failed checks
-        self.assertEqual(len(result.failed_checks), 3)
+        # Should have at least 3 failed checks (eval gate may add warning)
+        self.assertGreaterEqual(len(result.failed_checks), 3)
 
 
 # =============================================================================

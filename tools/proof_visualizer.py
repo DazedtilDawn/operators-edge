@@ -1,318 +1,112 @@
 #!/usr/bin/env python3
 """
-Proof Visualizer v0.1
-Transforms .proof/session_log.jsonl into an interactive HTML dashboard.
+Proof Visualizer - Session Analysis Tool
+Facade module that re-exports from focused submodules.
 
 Usage:
-    python proof_visualizer.py                    # Uses default .proof/session_log.jsonl
-    python proof_visualizer.py path/to/log.jsonl  # Custom log file
-    python proof_visualizer.py --out report.html  # Custom output file
+    python3 tools/proof_visualizer.py [log_path] [--out output.html] [--history]
+
+Submodules:
+    proof_viz_config   - Constants, thresholds, tool classifications
+    proof_viz_loaders  - File I/O, data loading
+    proof_viz_builders - Timeline, graph, diff cache building
+    proof_viz_analysis - Stats, insights, phases, anomalies
+    proof_viz_export   - Report generation, CTI history
+    proof_viz_render   - HTML generation with external assets
 """
-import json
 import sys
-import re
+import json
 from pathlib import Path
-from datetime import datetime
-from collections import defaultdict
 from typing import List, Dict, Any, Optional
 
+# Re-export from submodules for backward compatibility
+from proof_viz_config import (
+    READ_TOOLS,
+    EDIT_TOOLS,
+    RUN_TOOLS,
+    DEFAULT_MIN_STREAK,
+    DEFAULT_MIN_PHASE_SIZE,
+    ANOMALY_SIGMA,
+    CTI_DRIFT_THRESHOLD,
+    CONSTELLATION_STARS,
+    CONSTELLATION_CONTEXT,
+    HOVER_REVEAL_RADIUS,
+    get_action_type,
+)
 
-def load_proof_log(path: Path) -> List[Dict[str, Any]]:
-    """Load JSONL proof log."""
-    entries = []
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                try:
-                    entries.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-    return entries
+from proof_viz_loaders import (
+    load_proof_log,
+    extract_file_path,
+    load_cti_history,
+)
 
+from proof_viz_builders import (
+    build_timeline,
+    build_diff_cache,
+    build_dependency_graph,
+    compute_nebula_clusters,
+    compute_nebula_clusters_topology,
+)
 
-def extract_file_path(input_preview: Any) -> Optional[str]:
-    """Extract file path from various input_preview formats."""
-    if isinstance(input_preview, dict):
-        for key in ('file', 'file_path', 'path'):
-            if key in input_preview:
-                return input_preview[key]
-    elif isinstance(input_preview, str):
-        # Check if it looks like a file path
-        if '/' in input_preview or '\\' in input_preview:
-            # Extract path from string like "{'file': '/path/to/file'}"
-            match = re.search(r"['\"]?(?:file|file_path|path)['\"]?\s*:\s*['\"]([^'\"]+)['\"]", input_preview)
-            if match:
-                return match.group(1)
-            # Or just return if it looks like a path
-            if input_preview.startswith('/') or input_preview.startswith('C:'):
-                return input_preview
-    return None
+from proof_viz_analysis import (
+    compute_stats,
+    compute_insights,
+    compute_phase_cti,
+    compute_phase_duration,
+    format_duration,
+    detect_phases,
+    generate_phase_summary,
+    compute_anomalies,
+    compute_beginner_view,
+    compute_summary,
+)
 
+from proof_viz_export import (
+    export_anomaly_report,
+    export_phase_summary,
+    append_cti_history,
+    check_drift,
+)
 
-def build_timeline(entries: List[Dict]) -> List[Dict]:
-    """Build timeline data for visualization."""
-    timeline = []
-    for entry in entries:
-        ts = entry.get('timestamp', '')
-        tool = entry.get('tool', 'unknown')
-        success = entry.get('success', True)
-        file_path = extract_file_path(entry.get('input_preview'))
+from proof_viz_render import generate_html
 
-        timeline.append({
-            'timestamp': ts,
-            'tool': tool,
-            'success': success,
-            'file': Path(file_path).name if file_path else None,
-            'full_path': file_path,
-        })
-    return timeline
-
-
-def build_dependency_graph(entries: List[Dict]) -> Dict:
-    """Build tool → file dependency graph."""
-    nodes = set()
-    edges = []
-    file_tools = defaultdict(set)  # file → tools that touched it
-
-    for entry in entries:
-        tool = entry.get('tool', 'unknown')
-        file_path = extract_file_path(entry.get('input_preview'))
-
-        nodes.add(f"tool:{tool}")
-
-        if file_path:
-            short_name = Path(file_path).name
-            nodes.add(f"file:{short_name}")
-            edge_key = (f"tool:{tool}", f"file:{short_name}")
-            if edge_key not in [(e['source'], e['target']) for e in edges]:
-                edges.append({
-                    'source': f"tool:{tool}",
-                    'target': f"file:{short_name}",
-                })
-            file_tools[short_name].add(tool)
-
-    return {
-        'nodes': [{'id': n, 'type': n.split(':')[0]} for n in nodes],
-        'edges': edges,
-    }
-
-
-def compute_stats(entries: List[Dict]) -> Dict:
-    """Compute summary statistics."""
-    total = len(entries)
-    successes = sum(1 for e in entries if e.get('success', True))
-    failures = total - successes
-
-    tool_counts = defaultdict(int)
-    for e in entries:
-        tool_counts[e.get('tool', 'unknown')] += 1
-
-    # CTI: entries with traceable file paths
-    with_cause = sum(1 for e in entries if extract_file_path(e.get('input_preview')))
-    cti = with_cause / total if total > 0 else 1.0
-
-    # Time range
-    timestamps = [e.get('timestamp', '') for e in entries if e.get('timestamp')]
-    if timestamps:
-        first = min(timestamps)
-        last = max(timestamps)
-    else:
-        first = last = 'unknown'
-
-    return {
-        'total_events': total,
-        'successes': successes,
-        'failures': failures,
-        'success_rate': f"{100 * successes / total:.1f}%" if total > 0 else "N/A",
-        'cti': f"{100 * cti:.1f}%",
-        'tool_counts': dict(tool_counts),
-        'time_range': {'start': first, 'end': last},
-    }
-
-
-def generate_html(timeline: List[Dict], graph: Dict, stats: Dict) -> str:
-    """Generate HTML with embedded D3.js visualization."""
-    return f'''<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>Proof Visualizer - Operator's Edge</title>
-    <script src="https://d3js.org/d3.v7.min.js"></script>
-    <style>
-        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace; background: #0d1117; color: #c9d1d9; padding: 20px; }}
-        h1 {{ color: #58a6ff; margin-bottom: 10px; }}
-        h2 {{ color: #8b949e; font-size: 14px; margin: 20px 0 10px; text-transform: uppercase; letter-spacing: 1px; }}
-        .stats {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-bottom: 30px; }}
-        .stat {{ background: #161b22; padding: 15px; border-radius: 6px; border: 1px solid #30363d; }}
-        .stat-value {{ font-size: 24px; font-weight: bold; color: #58a6ff; }}
-        .stat-label {{ font-size: 12px; color: #8b949e; margin-top: 5px; }}
-        .container {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }}
-        .panel {{ background: #161b22; border-radius: 6px; border: 1px solid #30363d; padding: 15px; min-height: 400px; }}
-        .timeline-item {{ padding: 8px 12px; border-left: 3px solid #30363d; margin: 5px 0; font-size: 12px; }}
-        .timeline-item.success {{ border-color: #238636; }}
-        .timeline-item.failure {{ border-color: #da3633; background: #1f1315; }}
-        .tool {{ color: #d2a8ff; font-weight: bold; }}
-        .file {{ color: #7ee787; }}
-        .time {{ color: #6e7681; font-size: 10px; }}
-        #graph {{ width: 100%; height: 400px; }}
-        .node-tool {{ fill: #d2a8ff; }}
-        .node-file {{ fill: #7ee787; }}
-        .link {{ stroke: #30363d; stroke-opacity: 0.6; }}
-        text {{ fill: #c9d1d9; font-size: 10px; }}
-    </style>
-</head>
-<body>
-    <h1>Proof Visualizer</h1>
-    <p style="color: #8b949e; margin-bottom: 20px;">Operator's Edge - Session Analysis</p>
-
-    <h2>Summary</h2>
-    <div class="stats">
-        <div class="stat">
-            <div class="stat-value">{stats['total_events']}</div>
-            <div class="stat-label">Total Events</div>
-        </div>
-        <div class="stat">
-            <div class="stat-value">{stats['success_rate']}</div>
-            <div class="stat-label">Success Rate</div>
-        </div>
-        <div class="stat">
-            <div class="stat-value">{stats['cti']}</div>
-            <div class="stat-label">Traceability (CTI)</div>
-        </div>
-        <div class="stat">
-            <div class="stat-value">{stats['failures']}</div>
-            <div class="stat-label">Failures</div>
-        </div>
-    </div>
-
-    <h2>Tool Distribution</h2>
-    <div class="stats">
-        {"".join(f'<div class="stat"><div class="stat-value">{count}</div><div class="stat-label">{tool}</div></div>' for tool, count in sorted(stats['tool_counts'].items(), key=lambda x: -x[1]))}
-    </div>
-
-    <div class="container">
-        <div class="panel">
-            <h2>Timeline (Recent 100)</h2>
-            <div id="timeline">
-                {"".join(f'''<div class="timeline-item {'success' if e['success'] else 'failure'}">
-                    <span class="tool">{e['tool']}</span>
-                    {f'<span class="file"> → {e["file"]}</span>' if e['file'] else ''}
-                    <div class="time">{e['timestamp']}</div>
-                </div>''' for e in timeline[-100:][::-1])}
-            </div>
-        </div>
-        <div class="panel">
-            <h2>Dependency Graph</h2>
-            <svg id="graph"></svg>
-        </div>
-    </div>
-
-    <script>
-        const graphData = {json.dumps(graph)};
-
-        const svg = d3.select("#graph");
-        const width = svg.node().parentElement.clientWidth;
-        const height = 400;
-        svg.attr("viewBox", [0, 0, width, height]);
-
-        const simulation = d3.forceSimulation(graphData.nodes)
-            .force("link", d3.forceLink(graphData.edges).id(d => d.id).distance(80))
-            .force("charge", d3.forceManyBody().strength(-200))
-            .force("center", d3.forceCenter(width / 2, height / 2));
-
-        const link = svg.append("g")
-            .selectAll("line")
-            .data(graphData.edges)
-            .join("line")
-            .attr("class", "link")
-            .attr("stroke-width", 1.5);
-
-        const node = svg.append("g")
-            .selectAll("g")
-            .data(graphData.nodes)
-            .join("g")
-            .call(d3.drag()
-                .on("start", (e, d) => {{ if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; }})
-                .on("drag", (e, d) => {{ d.fx = e.x; d.fy = e.y; }})
-                .on("end", (e, d) => {{ if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }}));
-
-        node.append("circle")
-            .attr("r", 8)
-            .attr("class", d => d.type === "tool" ? "node-tool" : "node-file");
-
-        node.append("text")
-            .attr("dx", 12)
-            .attr("dy", 4)
-            .text(d => d.id.split(":")[1]);
-
-        simulation.on("tick", () => {{
-            link
-                .attr("x1", d => d.source.x)
-                .attr("y1", d => d.source.y)
-                .attr("x2", d => d.target.x)
-                .attr("y2", d => d.target.y);
-            node.attr("transform", d => `translate(${{d.x}},${{d.y}})`);
-        }});
-    </script>
-</body>
-</html>'''
-
-
-def load_cti_history(history_path: Path) -> List[Dict]:
-    """Load CTI history from CSV."""
-    if not history_path.exists():
-        return []
-    history = []
-    with open(history_path) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith('timestamp'):  # skip header
-                parts = line.split(',')
-                if len(parts) >= 4:
-                    history.append({
-                        'timestamp': parts[0],
-                        'events': int(parts[1]),
-                        'cti': float(parts[2]),
-                        'success_rate': float(parts[3]),
-                    })
-    return history
-
-
-def append_cti_history(history_path: Path, stats: Dict):
-    """Append current stats to CTI history."""
-    is_new = not history_path.exists()
-    with open(history_path, 'a') as f:
-        if is_new:
-            f.write('timestamp,events,cti,success_rate\n')
-        cti_val = float(stats['cti'].rstrip('%'))
-        sr_val = float(stats['success_rate'].rstrip('%')) if stats['success_rate'] != 'N/A' else 0
-        f.write(f"{datetime.now().isoformat()},{stats['total_events']},{cti_val},{sr_val}\n")
-
-
-def check_drift(history: List[Dict], current_cti: float, threshold: float = 10.0) -> Optional[str]:
-    """Check if CTI has drifted beyond threshold from last run."""
-    if not history:
-        return None
-    last_cti = history[-1]['cti']
-    drift = last_cti - current_cti
-    if drift > threshold:
-        return f"WARNING: CTI drift {drift:.1f}% (was {last_cti:.1f}%, now {current_cti:.1f}%)"
-    elif drift > 0:
-        return f"CTI down {drift:.1f}% from last run"
-    elif drift < 0:
-        return f"CTI up {-drift:.1f}% from last run"
-    return None
+# Public API
+__all__ = [
+    # Config
+    'READ_TOOLS', 'EDIT_TOOLS', 'RUN_TOOLS',
+    'DEFAULT_MIN_STREAK', 'DEFAULT_MIN_PHASE_SIZE',
+    'ANOMALY_SIGMA', 'CTI_DRIFT_THRESHOLD',
+    'CONSTELLATION_STARS', 'CONSTELLATION_CONTEXT',
+    'HOVER_REVEAL_RADIUS', 'get_action_type',
+    # Loaders
+    'load_proof_log', 'extract_file_path', 'load_cti_history',
+    # Builders
+    'build_timeline', 'build_diff_cache', 'build_dependency_graph',
+    'compute_nebula_clusters', 'compute_nebula_clusters_topology',
+    # Analysis
+    'compute_stats', 'compute_insights', 'compute_phase_cti',
+    'compute_phase_duration', 'format_duration', 'detect_phases',
+    'generate_phase_summary', 'compute_anomalies',
+    'compute_beginner_view', 'compute_summary',
+    # Export
+    'export_anomaly_report', 'export_phase_summary',
+    'append_cti_history', 'check_drift',
+    # Render
+    'generate_html',
+    # Main
+    'main',
+]
 
 
 def main():
+    """Main entry point for proof visualization generation."""
     # Parse args
     args = sys.argv[1:]
     log_path = Path('.proof/session_log.jsonl')
     out_path = Path('proof_viz.html')
     history_path = Path('.proof/cti_history.csv')
     track_history = False
+    inline_assets = False
 
     i = 0
     while i < len(args):
@@ -321,6 +115,9 @@ def main():
             i += 2
         elif args[i] == '--history':
             track_history = True
+            i += 1
+        elif args[i] == '--inline':
+            inline_assets = True
             i += 1
         elif not args[i].startswith('-'):
             log_path = Path(args[i])
@@ -339,11 +136,14 @@ def main():
     timeline = build_timeline(entries)
     graph = build_dependency_graph(entries)
     stats = compute_stats(entries)
+    insights = compute_insights(graph, stats)
 
     cti_val = float(stats['cti'].rstrip('%'))
     print(f"Stats: {stats['total_events']} events, {stats['success_rate']} success, CTI={stats['cti']}")
+    print(f"Insights: {len(insights)} generated")
 
-    # Drift detection
+    # Drift detection (compute before summary so we can include it)
+    drift_msg = None
     if track_history:
         history = load_cti_history(history_path)
         drift_msg = check_drift(history, cti_val)
@@ -352,7 +152,124 @@ def main():
         append_cti_history(history_path, stats)
         print(f"History: {len(history) + 1} runs tracked in {history_path}")
 
-    html = generate_html(timeline, graph, stats)
+    summary = compute_summary(graph, stats, insights, drift_msg)
+    print(f"Summary: generated")
+
+    beginner_view = compute_beginner_view(stats, graph)
+    print(f"Quick View: {beginner_view['status_text']} (Health: {beginner_view['health_score']}%)")
+
+    # Export anomaly report
+    anomalies = compute_anomalies(graph)
+    if anomalies:
+        anomaly_path = Path('.proof/anomaly_report.json')
+        export_anomaly_report(anomalies, anomaly_path)
+        print(f"Anomalies: {len(anomalies)} detected (>{ANOMALY_SIGMA}σ)")
+
+    # Detect phases for Story Mode
+    phases = detect_phases(entries)
+    phase_summary_text = generate_phase_summary(phases, entries)
+    print(f"Phases: {len(phases)} detected")
+
+    # Export phase summary JSON
+    phase_summary_path = Path('.proof/phase_summary.json')
+    phase_summary = export_phase_summary(phases, entries, phase_summary_path)
+    print(f"Phase summary: exported to {phase_summary_path}")
+
+    # Load dependencies for Explorer Mode
+    deps_path = Path('.proof/dependencies.json')
+    explorer_data = None
+    if deps_path.exists():
+        try:
+            explorer_data = json.loads(deps_path.read_text())
+            # Mark existing edges as co-occurrence type
+            for edge in explorer_data.get('edges', []):
+                edge['edgeType'] = 'cooccur'
+            print(f"Explorer: {explorer_data['stats']['total_files']} files, {explorer_data['stats']['total_edges']} co-occur edges")
+        except Exception:
+            pass
+
+    # Load import graph and merge into explorer data
+    import_graph_path = Path('.proof/import_graph.json')
+    if import_graph_path.exists() and explorer_data:
+        try:
+            import_graph = json.loads(import_graph_path.read_text())
+            import_edges = import_graph.get('edges', [])
+
+            # Get existing node IDs
+            existing_node_ids = {n['id'] for n in explorer_data.get('nodes', [])}
+
+            # Add import edges (only for files that exist in explorer_data)
+            added_edges = 0
+            for edge in import_edges:
+                if edge['source'] in existing_node_ids and edge['target'] in existing_node_ids:
+                    explorer_data['edges'].append({
+                        'source': edge['source'],
+                        'target': edge['target'],
+                        'type': 'import',
+                        'edgeType': 'import',
+                        'weight': edge.get('weight', 1)
+                    })
+                    added_edges += 1
+
+            explorer_data['stats']['import_edges'] = added_edges
+            print(f"Explorer: added {added_edges} import edges")
+        except Exception as e:
+            print(f"Warning: Could not load import graph: {e}")
+
+    # Compute nebula clusters (directory default + semantic topology)
+    if explorer_data:
+        cluster_map_dir = compute_nebula_clusters(
+            explorer_data.get('nodes', []),
+            explorer_data.get('edges', []),
+            min_cluster_size=3
+        )
+        cluster_map_semantic = compute_nebula_clusters_topology(
+            explorer_data.get('nodes', []),
+            explorer_data.get('edges', []),
+            min_cluster_size=3
+        )
+
+        # Add cluster assignments to nodes (directory is default)
+        for node in explorer_data.get('nodes', []):
+            node_id = node.get('id')
+            node['cluster_dir'] = cluster_map_dir.get(node_id, -1)
+            node['cluster_semantic'] = cluster_map_semantic.get(node_id, -1)
+            node['cluster'] = node['cluster_dir']
+
+        # Count clusters for stats
+        dir_cluster_ids = set(c for c in cluster_map_dir.values() if c >= 0)
+        semantic_cluster_ids = set(c for c in cluster_map_semantic.values() if c >= 0)
+        explorer_data['stats']['nebula_clusters'] = len(dir_cluster_ids)
+        explorer_data['stats']['nebula_clusters_dir'] = len(dir_cluster_ids)
+        explorer_data['stats']['nebula_clusters_semantic'] = len(semantic_cluster_ids)
+        print(
+            f"Explorer: {len(dir_cluster_ids)} directory clusters, "
+            f"{len(semantic_cluster_ids)} semantic clusters detected"
+        )
+
+    # Load saved layout positions if available
+    layout_path = Path('.proof/layout.json')
+    saved_layout = None
+    if layout_path.exists():
+        try:
+            saved_layout = json.loads(layout_path.read_text())
+            print(f"Layout: loaded {len(saved_layout.get('story', {}))} story + {len(saved_layout.get('explorer', {}))} explorer positions")
+        except Exception:
+            pass
+
+    # Build diff cache from Edit entries
+    diff_cache = build_diff_cache(entries)
+    if diff_cache:
+        diff_cache_path = Path('.proof/diff_cache.json')
+        diff_cache_path.write_text(json.dumps(diff_cache, indent=2))
+        total_diffs = sum(len(v) for v in diff_cache.values())
+        print(f"Diff cache: {len(diff_cache)} files, {total_diffs} diffs")
+
+    html = generate_html(
+        timeline, graph, stats, insights, summary, beginner_view,
+        phases, explorer_data, saved_layout, diff_cache,
+        inline_assets=inline_assets
+    )
     out_path.write_text(html)
     print(f"Generated {out_path}")
 

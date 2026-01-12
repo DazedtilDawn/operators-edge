@@ -86,6 +86,24 @@ class TestExecuteTransition(unittest.TestCase):
 
         self.assertEqual(result.current_gear, Gear.DREAM)
 
+    def test_active_to_dream_transition(self):
+        """Should transition from ACTIVE to DREAM."""
+        from gear_engine import execute_transition
+        from gear_config import Gear, GearTransition, GearState
+
+        initial = GearState(
+            current_gear=Gear.ACTIVE,
+            entered_at="2025-01-01",
+            iterations=2,
+            last_transition=None,
+            patrol_findings_count=0,
+            dream_proposals_count=0,
+        )
+
+        result = execute_transition(initial, GearTransition.ACTIVE_TO_DREAM)
+
+        self.assertEqual(result.current_gear, Gear.DREAM)
+
     def test_dream_to_active_transition(self):
         """Should transition from DREAM to ACTIVE."""
         from gear_engine import execute_transition
@@ -130,8 +148,8 @@ class TestFindTransition(unittest.TestCase):
         from gear_engine import _find_transition
         from gear_config import Gear
 
-        # ACTIVE to DREAM is not a direct transition
-        result = _find_transition(Gear.ACTIVE, Gear.DREAM)
+        # PATROL to PATROL is not a direct transition
+        result = _find_transition(Gear.PATROL, Gear.PATROL)
         self.assertIsNone(result)
 
 

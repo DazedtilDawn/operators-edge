@@ -39,6 +39,11 @@ class TestGearTransitionEnum(unittest.TestCase):
         from gear_config import GearTransition
         self.assertIsNotNone(GearTransition.ACTIVE_TO_PATROL)
 
+    def test_active_to_dream(self):
+        """Should have ACTIVE_TO_DREAM transition."""
+        from gear_config import GearTransition
+        self.assertIsNotNone(GearTransition.ACTIVE_TO_DREAM)
+
     def test_patrol_to_active(self):
         """Should have PATROL_TO_ACTIVE transition."""
         from gear_config import GearTransition

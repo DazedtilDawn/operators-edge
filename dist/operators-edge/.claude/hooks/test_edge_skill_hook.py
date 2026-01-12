@@ -19,6 +19,7 @@ from edge_skill_hook import (
     handle_stop,
     handle_approve,
     handle_skip,
+    handle_dismiss,
     handle_run,
 )
 from gear_config import Gear, GearState, get_default_gear_state
@@ -164,6 +165,29 @@ class TestHandleStatus:
         assert "1 completed" in result
         assert "1 pending" in result
 
+    @patch('edge_skill_hook.get_pending_junction')
+    @patch('edge_skill_hook.load_gear_state')
+    @patch('edge_skill_hook.load_yaml_state')
+    @patch('edge_skill_hook.detect_current_gear')
+    def test_status_with_pending_steps_and_junction(self, mock_detect, mock_state, mock_gear, mock_pending):
+        """Status should include pending steps and junction without crashing."""
+        mock_gear.return_value = get_default_gear_state()
+        mock_state.return_value = {
+            "objective": "Test",
+            "plan": [
+                {"status": "completed", "description": "Step 1"},
+                {"status": "pending", "description": "Step 2"},
+            ]
+        }
+        mock_detect.return_value = Gear.ACTIVE
+        mock_pending.return_value = {"type": "proposal", "payload": {"reason": "Review proposal"}}
+
+        result = handle_status()
+        assert "2 steps" in result
+        assert "1 pending" in result
+        assert "Pending junction" in result
+        assert "proposal" in result
+
 
 # =============================================================================
 # HANDLER TESTS - STOP
@@ -187,6 +211,22 @@ class TestHandleStop:
         assert "5" in result  # findings
         assert "2" in result  # proposals
         assert "10" in result  # iterations
+
+
+# =============================================================================
+# HANDLER TESTS - APPROVE/SKIP/DISMISS
+# =============================================================================
+
+class TestHandleJunctionActions:
+    """Tests for junction action handlers."""
+
+    @patch('edge_skill_hook.clear_pending_junction')
+    def test_handle_approve_timeout(self, mock_clear):
+        """Approve should surface lock timeout without crashing."""
+        mock_clear.side_effect = TimeoutError("Timeout acquiring lock for junction_state.json")
+        message, should_run = handle_approve()
+        assert "State lock busy" in message
+        assert should_run is False
 
     @patch('edge_skill_hook.load_gear_state')
     @patch('edge_skill_hook.reset_gear_state')
@@ -215,8 +255,9 @@ class TestHandleApprove:
             if dispatch_file.exists():
                 dispatch_file.unlink()
 
-        result = handle_approve()
+        result, should_run = handle_approve()
         assert "No pending junction" in result
+        assert should_run is True
 
     @patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": "/tmp/test_project"})
     def test_approve_clears_junction(self, tmp_path):
@@ -225,18 +266,27 @@ class TestHandleApprove:
         state_dir = Path("/tmp/test_project/.claude/state")
         state_dir.mkdir(parents=True, exist_ok=True)
 
-        dispatch_file = state_dir / "dispatch_state.json"
-        dispatch_file.write_text(json.dumps({
-            "pending_junction": True,
-            "junction_type": "complexity"
+        junction_file = state_dir / "junction_state.json"
+        junction_file.write_text(json.dumps({
+            "schema_version": 1,
+            "pending": {
+                "id": "test",
+                "type": "complexity",
+                "payload": {"reason": "needs review"},
+                "created_at": "2025-01-01T00:00:00",
+                "source": "edge"
+            },
+            "history_tail": [],
+            "suppression": []
         }))
 
-        result = handle_approve()
+        result, should_run = handle_approve()
         assert "APPROVED" in result or "Junction cleared" in result
+        assert should_run is True
 
         # Cleanup
-        if dispatch_file.exists():
-            dispatch_file.unlink()
+        if junction_file.exists():
+            junction_file.unlink()
 
 
 # =============================================================================
@@ -249,8 +299,9 @@ class TestHandleSkip:
     @patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": "/tmp/test_project"})
     def test_skip_no_junction(self):
         """Skip with no junction should indicate nothing to skip."""
-        result = handle_skip()
+        result, should_run = handle_skip()
         assert "Nothing to skip" in result
+        assert should_run is True
 
     @patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": "/tmp/test_project"})
     def test_skip_clears_junction(self):
@@ -259,18 +310,62 @@ class TestHandleSkip:
         state_dir = Path("/tmp/test_project/.claude/state")
         state_dir.mkdir(parents=True, exist_ok=True)
 
-        dispatch_file = state_dir / "dispatch_state.json"
-        dispatch_file.write_text(json.dumps({
-            "pending_junction": True,
-            "junction_type": "dangerous"
+        junction_file = state_dir / "junction_state.json"
+        junction_file.write_text(json.dumps({
+            "schema_version": 1,
+            "pending": {
+                "id": "test",
+                "type": "dangerous",
+                "payload": {"reason": "dangerous op"},
+                "created_at": "2025-01-01T00:00:00",
+                "source": "edge"
+            },
+            "history_tail": [],
+            "suppression": []
         }))
 
-        result = handle_skip()
+        result, should_run = handle_skip()
         assert "SKIPPED" in result or "skipped" in result.lower()
+        assert should_run is True
 
         # Cleanup
-        if dispatch_file.exists():
-            dispatch_file.unlink()
+        if junction_file.exists():
+            junction_file.unlink()
+
+
+# =============================================================================
+# HANDLER TESTS - DISMISS
+# =============================================================================
+
+class TestHandleDismiss:
+    """Tests for handle_dismiss function."""
+
+    @patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": "/tmp/test_project"})
+    def test_dismiss_clears_junction(self):
+        """Dismiss should clear pending junction."""
+        state_dir = Path("/tmp/test_project/.claude/state")
+        state_dir.mkdir(parents=True, exist_ok=True)
+
+        junction_file = state_dir / "junction_state.json"
+        junction_file.write_text(json.dumps({
+            "schema_version": 1,
+            "pending": {
+                "id": "test",
+                "type": "proposal",
+                "payload": {"reason": "review proposal"},
+                "created_at": "2025-01-01T00:00:00",
+                "source": "edge"
+            },
+            "history_tail": [],
+            "suppression": []
+        }))
+
+        result, should_run = handle_dismiss()
+        assert "DISMISSED" in result or "dismissed" in result.lower()
+        assert should_run is True
+
+        if junction_file.exists():
+            junction_file.unlink()
 
 
 # =============================================================================
@@ -331,6 +426,33 @@ class TestHandleRun:
         assert "JUNCTION" in result
         assert "complexity" in result
         assert "/edge approve" in result
+
+    @patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": "/tmp/test_project"})
+    def test_run_blocks_on_pending_junction(self):
+        """Run should block when pending junction exists."""
+        state_dir = Path("/tmp/test_project/.claude/state")
+        state_dir.mkdir(parents=True, exist_ok=True)
+
+        junction_file = state_dir / "junction_state.json"
+        junction_file.write_text(json.dumps({
+            "schema_version": 1,
+            "pending": {
+                "id": "test",
+                "type": "quality_gate",
+                "payload": {"reason": "quality gate failed"},
+                "created_at": "2025-01-01T00:00:00",
+                "source": "edge"
+            },
+            "history_tail": [],
+            "suppression": []
+        }))
+
+        result = handle_run()
+        assert "JUNCTION PENDING" in result
+        assert "quality_gate" in result
+
+        if junction_file.exists():
+            junction_file.unlink()
 
     @patch('edge_skill_hook.run_gear_engine')
     @patch('edge_skill_hook.load_yaml_state')
@@ -449,3 +571,29 @@ class TestEdgeCases:
         # Should not raise
         result = handle_run()
         assert "OPERATOR'S EDGE" in result
+
+    @patch('edge_skill_hook.set_pending_junction')
+    @patch('edge_skill_hook.run_gear_engine')
+    @patch('edge_skill_hook.load_yaml_state')
+    @patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": "/tmp/test_project"})
+    def test_run_junction_save_timeout(self, mock_state, mock_engine, mock_set_pending):
+        """Run should surface lock timeout when saving junction."""
+        mock_state.return_value = {"objective": "Test", "plan": [{"status": "pending"}]}
+
+        from gear_engine import GearEngineResult
+        mock_engine.return_value = GearEngineResult(
+            gear_executed=Gear.ACTIVE,
+            transitioned=False,
+            new_gear=None,
+            transition_type=None,
+            gear_result={},
+            junction_hit=True,
+            junction_type="proposal",
+            junction_reason="Review proposal",
+            continue_loop=False,
+            display_message="Junction",
+        )
+        mock_set_pending.side_effect = TimeoutError("Timeout acquiring lock for junction_state.json")
+
+        result = handle_run()
+        assert "State lock busy" in result

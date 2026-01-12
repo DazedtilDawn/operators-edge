@@ -30,7 +30,10 @@ from edge_utils import (
     file_hash,
     load_yaml_state,
     get_unresolved_mismatches,
-    check_state_entropy
+    check_state_entropy,
+    get_evals_config,
+    auto_triage,
+    has_eval_run_since,
 )
 
 def respond(decision, reason):
@@ -120,6 +123,34 @@ def check_entropy():
 
     return (True, "State entropy OK")
 
+
+def check_eval_activity():
+    """Warn if evals are enabled but no eval_run recorded this session."""
+    state = load_yaml_state()
+    if not state:
+        return (True, "Could not load state")
+
+    evals_config = get_evals_config(state)
+    if not evals_config.get("enabled", True):
+        return (True, "Evals disabled")
+
+    if evals_config.get("mode") != "manual":
+        evals_config, _triage = auto_triage(state, evals_config, None)
+
+    level = evals_config.get("level", 0)
+    if level < 1:
+        return (True, "Evals not active for this session")
+
+    started_at = None
+    session = state.get("session", {})
+    if isinstance(session, dict):
+        started_at = session.get("started_at")
+
+    if has_eval_run_since(started_at):
+        return (True, "Eval activity recorded")
+
+    return (True, "No eval activity recorded this session")
+
 def main():
     all_passed = True
     messages = []
@@ -155,6 +186,11 @@ def main():
     # Check 5: Entropy (WARNING - v2)
     passed, msg = check_entropy()
     if "entropy" in msg.lower() or "pruning" in msg.lower():
+        messages.append(f"WARNING: {msg}")
+
+    # Check 6: Eval activity (WARNING)
+    passed, msg = check_eval_activity()
+    if "no eval activity" in msg.lower():
         messages.append(f"WARNING: {msg}")
 
     # Final decision

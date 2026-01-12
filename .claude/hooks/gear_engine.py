@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 import json
+import hashlib
 
 from gear_config import (
     Gear, GearTransition, GearState,
@@ -38,6 +39,7 @@ from quality_gate import (
     run_quality_gate, QualityGateResult,
     format_quality_gate_result, format_quality_junction,
 )
+from state_utils import write_json_atomic
 
 
 # =============================================================================
@@ -93,9 +95,8 @@ def load_gear_state() -> GearState:
 def save_gear_state(gear_state: GearState) -> None:
     """Save gear state to file."""
     try:
-        GEAR_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        GEAR_STATE_FILE.write_text(json.dumps(gear_state.to_dict(), indent=2))
-    except IOError:
+        write_json_atomic(GEAR_STATE_FILE, gear_state.to_dict(), indent=2)
+    except (IOError, OSError, TimeoutError):
         pass  # Non-critical
 
 
@@ -110,6 +111,38 @@ def reset_gear_state() -> GearState:
 # TRANSITION MANAGEMENT
 # =============================================================================
 
+def _is_objective_complete(state: Dict[str, Any]) -> bool:
+    """Check if all plan steps are completed."""
+    plan = state.get("plan", [])
+    if not plan:
+        return False
+    return all(
+        step.get("status") == "completed"
+        for step in plan
+        if isinstance(step, dict)
+    )
+
+
+def _compute_completion_epoch(state: Dict[str, Any]) -> Optional[str]:
+    """Compute a completion epoch hash for the current objective state."""
+    if not _is_objective_complete(state):
+        return None
+
+    plan = state.get("plan", [])
+    statuses = []
+    for step in plan:
+        if isinstance(step, dict):
+            statuses.append(step.get("status"))
+        else:
+            statuses.append(str(step))
+
+    payload = {
+        "objective": state.get("objective", ""),
+        "statuses": statuses,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
 def execute_transition(
     gear_state: GearState,
     transition: GearTransition,
@@ -122,6 +155,7 @@ def execute_transition(
     # Determine new gear from transition
     new_gear = {
         GearTransition.ACTIVE_TO_PATROL: Gear.PATROL,
+        GearTransition.ACTIVE_TO_DREAM: Gear.DREAM,
         GearTransition.PATROL_TO_ACTIVE: Gear.ACTIVE,
         GearTransition.PATROL_TO_DREAM: Gear.DREAM,
         GearTransition.DREAM_TO_ACTIVE: Gear.ACTIVE,
@@ -136,6 +170,8 @@ def execute_transition(
         last_transition=transition.value,
         patrol_findings_count=gear_state.patrol_findings_count,
         dream_proposals_count=gear_state.dream_proposals_count,
+        last_run_at=gear_state.last_run_at,
+        completion_epoch=gear_state.completion_epoch,
     )
 
 
@@ -167,6 +203,10 @@ def run_gear_engine(
     # Load current gear state
     gear_state = load_gear_state()
 
+    # Clear completion epoch if objective is no longer complete
+    if not _is_objective_complete(state) and gear_state.completion_epoch is not None:
+        gear_state.completion_epoch = None
+
     # Detect appropriate gear based on state
     detected_gear = detect_current_gear(state)
 
@@ -180,6 +220,8 @@ def run_gear_engine(
 
     # Execute the current gear
     gear_state.iterations += 1
+    gear_state.last_run_at = datetime.now().isoformat()
+    save_gear_state(gear_state)
 
     if gear_state.current_gear == Gear.ACTIVE:
         return _run_active(state, gear_state, project_dir)
@@ -207,6 +249,7 @@ def _find_transition(from_gear: Gear, to_gear: Gear) -> Optional[GearTransition]
     """Find the transition type between two gears."""
     mapping = {
         (Gear.ACTIVE, Gear.PATROL): GearTransition.ACTIVE_TO_PATROL,
+        (Gear.ACTIVE, Gear.DREAM): GearTransition.ACTIVE_TO_DREAM,
         (Gear.PATROL, Gear.ACTIVE): GearTransition.PATROL_TO_ACTIVE,
         (Gear.PATROL, Gear.DREAM): GearTransition.PATROL_TO_DREAM,
         (Gear.DREAM, Gear.ACTIVE): GearTransition.DREAM_TO_ACTIVE,
@@ -222,6 +265,21 @@ def _run_active(
 ) -> GearEngineResult:
     """Execute Active Gear."""
     result = run_active_gear(state, gear_state)
+
+    # Handle errors - do not continue loop on failure
+    if result.error:
+        return GearEngineResult(
+            gear_executed=Gear.ACTIVE,
+            transitioned=False,
+            new_gear=None,
+            transition_type=None,
+            gear_result=result.to_dict(),
+            junction_hit=False,
+            junction_type=None,
+            junction_reason=None,
+            continue_loop=False,
+            display_message=f"{format_active_status(state)}\n   Error: {result.error}",
+        )
 
     # Check for transition
     should_transition, transition = should_transition_from_active(state)
@@ -244,6 +302,26 @@ def _run_active(
     # Handle completion - run quality gate first (v3.9.3)
     if result.objective_completed or should_transition:
         if transition:
+            completion_epoch = _compute_completion_epoch(state)
+
+            # If we've already passed the gate for this completion epoch, skip gating
+            if completion_epoch and gear_state.completion_epoch == completion_epoch:
+                new_state = execute_transition(gear_state, transition)
+                new_state.completion_epoch = completion_epoch
+                save_gear_state(new_state)
+                return GearEngineResult(
+                    gear_executed=Gear.ACTIVE,
+                    transitioned=True,
+                    new_gear=Gear.PATROL,
+                    transition_type=transition,
+                    gear_result=result.to_dict(),
+                    junction_hit=False,
+                    junction_type=None,
+                    junction_reason=None,
+                    continue_loop=True,
+                    display_message="Quality gate already passed → Patrol",
+                )
+
             # Run quality gate before allowing transition
             quality_result = run_quality_gate(state, project_dir)
 
@@ -267,6 +345,8 @@ def _run_active(
 
             # Quality gate passed - proceed with transition
             new_state = execute_transition(gear_state, transition)
+            if completion_epoch:
+                new_state.completion_epoch = completion_epoch
             save_gear_state(new_state)
             return GearEngineResult(
                 gear_executed=Gear.ACTIVE,

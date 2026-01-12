@@ -104,11 +104,22 @@ def main():
                 print(f"❌ {test_summary}", file=sys.stderr)
                 print("⚠️  Consider amending the commit after fixing tests.", file=sys.stderr)
 
-    # For Edit/Write, log the file change
+    # For Edit/Write, log the file change with diff content
     elif tool_name in ("Edit", "Write", "NotebookEdit"):
         file_path = tool_input.get("file_path", "unknown")
         success = tool_result.get("success", True)
-        log_proof(tool_name, {"file": file_path}, f"Modified: {file_path}", success)
+
+        # Capture old_string/new_string for Edit operations (for diff preview)
+        if tool_name == "Edit":
+            old_string = tool_input.get("old_string", "")
+            new_string = tool_input.get("new_string", "")
+            log_proof(tool_name, {
+                "file": file_path,
+                "old_string": old_string[:2000] if old_string else "",  # Truncate large diffs
+                "new_string": new_string[:2000] if new_string else ""
+            }, f"Modified: {file_path}", success)
+        else:
+            log_proof(tool_name, {"file": file_path}, f"Modified: {file_path}", success)
 
     # For Read, just note what was read (lightweight)
     elif tool_name == "Read":

@@ -17,6 +17,7 @@ from typing import Optional, Tuple, Dict, Any
 # Add hooks directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from edge_utils import load_yaml_state, get_state_dir
+from state_utils import write_json_atomic
 from dispatch_config import (
     DispatchState,
     JunctionType,
@@ -31,6 +32,11 @@ from scout_config import (
     get_default_scout_state,
     sort_findings,
     SCOUT_THRESHOLDS,
+)
+from junction_utils import (
+    set_pending_junction,
+    clear_pending_junction,
+    get_pending_junction,
 )
 
 
@@ -62,8 +68,11 @@ def save_dispatch_state(state: dict) -> None:
     state_dir = get_state_dir()
     state_dir.mkdir(parents=True, exist_ok=True)
     dispatch_file = state_dir / "dispatch_state.json"
-    with open(dispatch_file, 'w') as f:
-        json.dump(state, f, indent=2)
+    try:
+        write_json_atomic(dispatch_file, state, indent=2)
+    except TimeoutError:
+        # Let callers decide how to surface contention
+        raise
 
 
 def update_dispatch_stats(state: dict, key: str) -> None:
@@ -224,11 +233,13 @@ def stop_dispatch(reason: str = "User stopped") -> dict:
 
 def pause_at_junction(dispatch_state: dict, junction_type: JunctionType, reason: str) -> None:
     """Pause dispatch at a junction."""
+    pending = set_pending_junction(junction_type.value, {"reason": reason}, source="dispatch")
     dispatch_state["state"] = DispatchState.JUNCTION.value
     dispatch_state["junction"] = {
         "type": junction_type.value,
         "reason": reason,
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now().isoformat(),
+        "id": pending.get("id") if pending else None,
     }
     update_dispatch_stats(dispatch_state, "junctions_hit")
     save_dispatch_state(dispatch_state)
@@ -236,6 +247,7 @@ def pause_at_junction(dispatch_state: dict, junction_type: JunctionType, reason:
 
 def resume_from_junction(dispatch_state: dict) -> None:
     """Resume dispatch after junction approval."""
+    clear_pending_junction("approve")
     dispatch_state["state"] = DispatchState.RUNNING.value
     dispatch_state["junction"] = None
     save_dispatch_state(dispatch_state)
@@ -264,13 +276,14 @@ def get_dispatch_status() -> Dict[str, Any]:
     """Get current dispatch status for display."""
     state = load_dispatch_state()
     yaml_state = load_yaml_state() or {}
+    pending = get_pending_junction()
 
     return {
         "enabled": state.get("enabled", False),
         "state": state.get("state", DispatchState.IDLE.value),
         "iteration": state.get("iteration", 0),
         "stuck_count": state.get("stuck_count", 0),
-        "junction": state.get("junction"),
+        "junction": pending or state.get("junction"),
         "stats": state.get("stats", {}),
         "objective": yaml_state.get("objective"),
         "plan_steps": len(yaml_state.get("plan", [])),

@@ -25,6 +25,11 @@ from edge_utils import (
     get_recent_failures,
     respond,
     get_state_dir,
+    get_evals_config,
+    auto_triage,
+    start_eval_run,
+    load_eval_state,
+    save_eval_state,
 )
 
 
@@ -155,6 +160,20 @@ def main():
     result = check_plan_requirement(tool_name, tool_input)
     if result:
         respond(*result)
+
+    # Eval automation: capture pre-tool snapshot for write/edit tools
+    if tool_name in ("Edit", "Write", "NotebookEdit"):
+        state = load_yaml_state()
+        evals_config = get_evals_config(state)
+        evals_config, _triage = auto_triage(state, evals_config, tool_name)
+
+        if evals_config.get("enabled", True) and evals_config.get("mode") != "manual":
+            if evals_config.get("level", 0) >= 1 and evals_config.get("snapshots", {}).get("enabled", True):
+                pending_run = start_eval_run(evals_config, tool_name)
+                eval_state = load_eval_state()
+                eval_state["pending_run"] = pending_run
+                eval_state["triage"] = evals_config.get("triage", {})
+                save_eval_state(eval_state)
 
     # All checks passed
     respond("approve", "Passed all pre-tool checks")

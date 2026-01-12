@@ -11,6 +11,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 from typing import Optional, Dict, Any
+from state_utils import write_json_atomic
 
 # =============================================================================
 # CONFIGURATION
@@ -187,9 +188,7 @@ def _save_current_task(task_id: str, url: str) -> None:
     """Save current task info for later updates."""
     state_path = _get_task_state_path()
     state_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(state_path, "w") as f:
-        json.dump({"task_id": task_id, "url": url}, f)
+    write_json_atomic(state_path, {"task_id": task_id, "url": url}, indent=2)
 
 
 def _load_current_task() -> Optional[Dict[str, str]]:

@@ -5,40 +5,119 @@
 session:
   id: "20251230-discovery-mode"
   started_at: "2025-12-30T00:00:00"
-  note: "v3.9.3 Quality Gate complete - 1350 tests"
+  note: "v3.9.5 Live Server Mode - bookmark localhost:8080"
 
+  state_hash_start: "68c413a8a31df2033deba53cb708e7f85b819196cc5643eb3a7445f16712e1dd"
 # What are we trying to achieve?
-objective: "Prepare dist for Windows deployment"
+objective: "Make /edge and /edge-loop self-consistent, deterministic, and race-safe with a single canonical contract (junctions, gears, persistence), and sync Claude Code skill versions"
 
 # Current position in the plan
-current_step: 1
+current_step: 11
 
 # The plan - each step must have description, status, and proof
 # Status: pending | in_progress | completed | blocked
 plan:
-  - description: "Update dist with all v3.9.3 modules"
+  - description: "Define canonical contract for /edge (junction schema + gear state invariants + result structure) and align docs with code"
     status: completed
-    proof: "66 hooks, 11 commands copied to dist/operators-edge/"
-  - description: "Add UserPromptSubmit hooks to setup.py"
+    proof: "Added docs/edge-command-contract.md with canonical /edge + /edge-loop contract, schemas, invariants, error semantics, and deviation list; referenced in CLAUDE.md."
+    expected: "Single junction schema and result contract documented; clear invariants for gear transitions and persistence"
+    verification: "Updated docs/specs reflect the canonical schema and invariants"
+    actual: "Created contract doc and linked it in CLAUDE.md; documented schemas, invariants, and current deviations."
+    delta: null
+  - description: "Implement deterministic engine behavior (complete transition graph, structured results, persist gear_state every run)"
     status: completed
-    proof: "setup.py updated with /edge and /edge-prune hooks"
-  - description: "Create v3.9.3 ZIP package"
+    proof: "Added ACTIVE→DREAM transition, persisted gear_state every run with last_run_at, and removed string-parsing control flow for approve/skip; updated tests for new transition and handler return types."
+    expected: "All gears reachable; run loop uses structured fields instead of output parsing; gear_state updated on every run"
+    verification: "Unit tests or manual checks confirm transitions and persisted iterations"
+    actual: "Implemented ACTIVE→DREAM in gear_config/gear_engine, added last_run_at persistence per run, and refactored approve/skip to return (message, should_run); updated related tests."
+    delta: null
+  - description: "Unify junction handling (approve/skip/dismiss semantics, pending gate, selection flows) with single schema"
     status: completed
-    proof: "dist/operators-edge-v3.9.3.zip created (255KB)"
-  - description: "Fix Windows env var syntax ($VAR -> %VAR%)"
+    proof: "Added junction_utils with junction_state.json schema, migrated edge_skill_hook to pending gate + approve/skip/dismiss via new schema, and integrated dispatch_utils with junction_state; updated tests."
+    expected: "Junctions are first-class, gate execution deterministically, and are cleared/updated consistently"
+    verification: "Approve/skip/dismiss behavior matches spec and no string matching is used"
+    actual: "Implemented junction_state.json with history/suppression, pending gate in handle_run, and approve/skip/dismiss semantics; tests updated."
+    delta: null
+  - description: "Normalize error semantics and limits (patrol/dream failures, quality gate epoch, enforce/remove limits)"
     status: completed
-    proof: "v3.9.4 uses get_project_dir_var() for platform-specific syntax"
-  - description: "Fix prune_skill_hook tuple vs dict bug"
+    proof: "Active/PATROL/DREAM now block transitions on errors; patrol scan timeout enforced; completion_epoch gates quality checks; pytest run for patrol/dream tests."
+    expected: "Errors are not silently treated as success; limits either enforced or removed"
+    verification: "Patrol/Dream error paths and quality gate behavior match spec"
+    actual: "Added completion_epoch gating in gear_engine, enforced patrol scan timeout, and prevented patrol/dream transitions on error; updated patrol/dream tests; pytest run for patrol/dream tests."
+    delta: null
+  - description: "Add race safety (locking + atomic writes) and edge-loop reliability (EDGE_PORT, verify server start, graceful failures)"
     status: completed
-    proof: "v3.9.5 handles (mem, reason) tuples from identify_decayed_memory"
-  - description: "Create GitHub repo"
+    proof: "Added file locks + atomic writes for state files; edge_loop.sh now respects EDGE_PORT, verifies server start, and handles failures gracefully; tests run for state_utils/dispatch_utils/clickup_utils."
+    expected: "State writes are atomic and serialized; edge_loop uses correct port and verifies server start"
+    verification: "Concurrent runs do not corrupt state; edge_loop honors EDGE_PORT"
+    actual: "Implemented lock/atomic helpers in state_utils; applied to gear_state, junction_state, dispatch_state, clickup_task, and active_context mismatch writes; updated edge_loop.sh with EDGE_PORT, server verification, and non-fatal error handling; pytest run for related modules."
+    delta: null
+  - description: "Update tests/docs/commands to match the new contract and remove deprecated behaviors"
     status: completed
-    proof: "https://github.com/DazedtilDawn/operators-edge"
-  - description: "Build Proof Visualizer v0.1"
+    proof: "Updated /edge and /edge-loop command docs, contract deviations, and CLAUDE.md to align with junction/gear behavior and EDGE_PORT; synced dist command docs."
+    expected: "Docs and command outputs align with implementation; tests cover new schema and transitions"
+    verification: "Tests or documented verification steps confirm behavior"
+    actual: "Aligned /edge docs to v3.9 gear detection/transition behavior, updated junction/argument semantics, refreshed edge_loop docs, fixed contract deviations, and synced dist command docs."
+    delta: "Documentation-only updates; no additional automated tests run for docs."
+  - description: "Audit Claude Code skill/command versions for drift against updated contract/docs"
     status: completed
-    proof: "tools/proof_visualizer.py - 1441 entries, CTI=73.4%"
-
+    proof: "Audit captured in active_context.yaml (targets and drift notes)."
+    expected: "All Claude Code skill/command files that mirror /edge or /edge-loop are identified for sync"
+    verification: "List of target files and delta notes recorded"
+    actual: "Audited Claude Code targets: .claude/skills/operators-edge/SKILL.md (gear definitions/outdated; missing junction_state/gear_state + quality gate references), .claude/commands/edge-yolo.md (no junction_state source-of-truth mention), dist/operators-edge/.claude/commands/edge-yolo.md (same). Confirmed .claude/commands/edge.md and edge-loop.md already updated and copied to dist."
+    delta: null
+  - description: "Apply contract-aligned updates to Claude Code skill/command files and any packaged copies"
+    status: completed
+    proof: "Updated operators-edge skill and edge-yolo command docs; synced dist edge-yolo.md."
+    expected: "Claude Code versions reflect junction_state/gear_state usage, EDGE_PORT, and current transitions"
+    verification: "Diffs show parity with canonical docs; spot-check outputs"
+    actual: "Updated .claude/skills/operators-edge/SKILL.md with v3.9 gear semantics, error handling, rate limit, and state file references; added junction_state source note to edge-yolo docs and synced dist copy."
+    delta: null
+  - description: "Finalize session state and run $edge-done."
+    status: completed
+    proof: "Session validation run and final state/proof recorded."
+  - description: "Fix /edge status crash and add lock-timeout handling with tests"
+    status: completed
+    proof: "Resolved status shadowing crash, added lock timeout handling for junction actions, added tests, and synced dist hooks."
+    expected: "Status is total/read-only; lock timeouts surface cleanly; tests cover new cases"
+    verification: "pytest .claude/hooks/test_edge_skill_hook.py"
+    actual: "Renamed junction vs step counters, added timeout handling for approve/skip/dismiss and junction persistence, added tests for status+timeouts, and copied updated hooks to dist; pytest passed."
+    delta: null
 # Completed work:
+# v3.9.8: Eval Phase 2 Enforcement - auto-mismatch on failure, gate_on_fail blocking, 7-day retention, 43 tests
+# v4.0: Operator's Edge Universal - Codex CLI adapter (9 steps, 6 skills installed to ~/.codex/skills/)
+# v2.2: Code Review Fixes - quadtree animation fallback, splitLines() for cross-platform line endings, unified .node-shape class
+# v2.1: Enhanced LLM Export - session context (phases, duration), related files, work timeline, phase-aware diffs
+# v2.0: Performance & Quality Fixes - quadtree O(log N), search+reveal fix, diff cap 2000 chars, style consistency
+# v1.9: LLM-Friendly Diff Export - one-click export (E key or button), markdown format with context + diff + analysis prompts
+# v1.8: Diff Takeover Polish - flex layout fills card space, max-width 900px, height:0 trick
+# v1.7: Diff Takeover Mode - click label or D key to expand diff, stats collapse, size/position persistence
+# v1.6: Multi-Layout Label Visibility - tooltips with full path on all layouts, smaller fonts (7-8px), filename truncation
+# v1.5: Multi-Layout Visualization - 6 layouts (Force, EdgeBundling, Treemap, CirclePacking, Sunburst, Grid) for Explorer + Story modes
+# v1.4: Proof Visualizer Refactor - split 4,371 line file into 7 focused modules (94% reduction), external CSS/JS assets
+# v1.3.1: Story Mode Polish - Clouds toggle button, shine/fade on touch, label readability, heatmap fix
+# v1.3: Constellation Mode - brightness tiers, hover reveal, search promotes, reveal all toggle
+# v1.2: Cluster Islands Layout - ring positioning, group forces, Story mode support
+# v0.9.9a: Soft Territory Fixes - fullscreen layout, aura visibility, Story mode auras, toggle for both modes
+# v0.9.9: Soft Territory - node auras merge into organic cluster boundaries, toggle button, replaces contours
+# v0.9.8: Diff Preview - show code changes in insight card, expand/collapse, red/green styling
+# v0.9.7: Import Graph - structural dependency edges in Explorer (151 edges), visual distinction, insight card badges
+# v0.9.6: Luminous Membranes - focus terrain, density contours, extension colors, edge glow, purity opacity
+# v0.9.5: Explorer focus mode, related files fix, dashboard skeleton, digest sparklines
+# v0.9: Edge Digest - automated reflection, recommendations to next_focus, integrated into edge_loop
+# v0.8.1: Layout cache, heat legend, fixed insight card anchoring, smooth mode transitions
+# v0.8+: Bug fixes - graphData.edges not links, position restore manual update, story mode controls moved below graph
+# v0.8: Explorer Mode - static codebase map, Story↔Explorer toggle, phase heat overlay, 105 files/242 edges
+# v0.7.1: Story Mode - UX Polish: keyboard navigation (← → Space Esc), phase toast, diff scaffold
+# v0.7: Story Mode - Insight Card 2.0: phase context, related files, persistence
+# v0.6c: Story Mode - Bug fix: action coloring now uses inline styles to override heatmap fills
+# v0.6b: Story Mode - SOTA Insight Card with fullscreen node click, sparklines, smart insights
+# v0.6a: Story Mode - Interaction Mode Coloring (N1) + Intensity Glow (N2) - nodes colored by action, pulse on touch
+# v0.5.2: Story Mode - fullscreen playback controls, disabled auto-refresh for stable playback
+# v0.5.1: Story Mode - phase duration + CTI delta in narrative, phase_summary.json export
+# v0.5: Story Mode - timeline scrubber, intent phases, playback controls, node persistence, micro-phase collapse
+# v3.9.5: Live Server Mode - edge_server.py at localhost:8080, auto-starts from edge_loop.sh
+# v3.9.4: Proof Visualizer v0.4.1 + Edge Loop integration (13 steps archived)
 # v1: YAML state, enforcement hooks, Windows packaging
 # v2: Smart orchestrator, 6-check loop, constant memory, pruning
 # v2.1: Research command system - scan, prompt generation, results tracking
@@ -63,12 +142,37 @@ plan:
 # v3.9.1: Hook-Based Prune - /edge-prune now triggers prune_skill_hook.py via UserPromptSubmit, 1307 tests
 # v3.9.2: Verification Field - optional verification on plan steps, PATROL flags unverified completions, 1321 tests
 # v3.9.3: Quality Gate - objective completion checks before ACTIVE→PATROL transition, 1350 tests
+# v3.9.6: Current Step Normalization - auto-normalize pointer when plan complete, 16 tests
+# v3.9.7: Eval Failure Scout Integration - PATROL surfaces eval invariant failures, 7 new tests
+# v3.9.8+: Port /edge-verify from Codex CLI - quality checks without ending session
 
-# Hard constraints - things that must not happen
-constraints: []
+
+# Auto-generated recommendations (Edge Digest)
+next_focus:
+  # Gap Analysis Roadmap (P0-P2 priority)
+  - "P0: Auto-detect mismatches from hook failures (PreToolUse blocks, PostToolUse unexpected state)"
+  - "P0: Evergreen principles library - add 'evergreen: true' flag, exempt from decay"
+  - "P1: Skill-Hook alignment validator - detect drift between skill prompts and hook code"
+  - "P1: Eval Phase 2 foundation - task bank schema (defer multi-run trials)"
+  - "P2: Codex CLI command parity - port missing 9 commands or document gaps"
+  - "P2: Verification enforcement upgrade - block at step completion, not PATROL"
+  # Original digest recommendations
+  - "Refactor proof_viz.js - high edit concentration"
+
+constraints:
+  - "Single canonical contract must drive CLI output, engine behavior, and docs"
+  - "No silent success on errors; failures must be surfaced truthfully"
+  - "Changes must remain cross-platform (no OS-specific tooling dependencies)"
+  - "Avoid breaking existing /edge-* commands unless explicitly deprecated"
 
 # Known risks and how we're mitigating them
-risks: []
+risks:
+  - risk: "Schema changes break backward compatibility with existing state files or tooling"
+    mitigation: "Version schema and include migration/compat handling where needed"
+  - risk: "Race-safety changes introduce deadlocks or performance regressions"
+    mitigation: "Use minimal locking with timeouts and atomic writes; keep critical sections small"
+  - risk: "Behavior changes diverge from docs or command expectations"
+    mitigation: "Update docs/tests alongside code and add explicit deprecation notes"
 
 # Memory (lessons with reinforcement tracking)
 memory:
@@ -196,35 +300,95 @@ memory:
     lesson: "Challenge lessons older than 7 days when relevant - tools and APIs change"
     reinforced: 1
     last_used: "2026-01-03"
+  - trigger: "svg + css + inline"
+    lesson: "SVG inline attributes (.attr) override CSS classes - use consistent styling approach"
+    reinforced: 1
+    last_used: "2026-01-04"
+  - trigger: "blend mode + dark background"
+    lesson: "mix-blend-mode: multiply makes colors invisible on dark backgrounds - use screen or no blend mode instead"
+    reinforced: 1
+    last_used: "2026-01-04"
+  - trigger: "svg fill override"
+    lesson: "SVG CSS class fill rules override .attr('fill') - use .style('fill') for inline styles that win over CSS"
+    reinforced: 1
+    last_used: "2026-01-05"
+  - trigger: "proof_viz html stale"
+    lesson: "proof_viz.html is static - must regenerate after code changes to proof_visualizer.py"
+    reinforced: 1
+    last_used: "2026-01-05"
+  - trigger: "codex cli + skills"
+    lesson: "Codex CLI skills go in ~/.codex/skills/<name>/SKILL.md for global availability; restart required after install"
+    reinforced: 1
+    last_used: "2026-01-06"
+  - trigger: "diff cache"
+    lesson: "Diff cache truncation (2000 chars + truncated flag) already exists in proof_viz_builders and is surfaced in proof_viz.js."
+    reinforced: 1
+    last_used: "2026-01-06"
+  - trigger: "debug logs"
+    lesson: "Guard proof_viz.js console output with PROOFVIZ_DEBUG + debugLog to avoid console spam."
+    reinforced: 1
+    last_used: "2026-01-06"
+  - trigger: "heatmap"
+    lesson: "Heatmap colors should use inline fill with important priority and clear inline fill when off to restore CSS."
+    reinforced: 1
+    last_used: "2026-01-06"
+  - trigger: "assets path"
+    lesson: "When mapping /assets/, strip query/fragment, URL-decode, resolve paths, and enforce base-dir containment to prevent traversal."
+    reinforced: 1
+    last_used: "2026-01-06"
+  - trigger: "css transitions"
+    lesson: "max-height: none cannot animate; focus-mode max-height overrides will snap by design."
+    reinforced: 1
+    last_used: "2026-01-06"
+  - trigger: "eval integration"
+    lesson: "Keep evals explicit via a single command to avoid default workflow friction."
+    reinforced: 1
+    last_used: "2026-01-10"
+  - trigger: "eval automation"
+    lesson: "Auto-triage plus warn-only defaults keeps evals low-noise while still capturing signal."
+    reinforced: 1
+    last_used: "2026-01-10"
+  - trigger: "eval core"
+    lesson: "Snapshot payloads need size caps and truncation summaries to avoid storage/perf issues."
+    reinforced: 1
+    last_used: "2026-01-10"
+  - trigger: "eval hooks"
+    lesson: "Limit eval automation to write/edit tools and keep warn-only defaults to avoid noisy gating."
+    reinforced: 1
+    last_used: "2026-01-10"
+  - trigger: "edge-eval"
+    lesson: "Keep manual eval commands as overrides even when automation is enabled."
+    reinforced: 1
+    last_used: "2026-01-10"
 
 
 # Self-assessment
 self_score:
-  timestamp: "2026-01-03T17:30:00"
+  timestamp: "2026-01-05T08:00:00"
   checks:
     mismatch_detection:
       met: true
-      note: "Caught stale subagents lesson when challenged, corrected immediately"
+      note: "Caught attr vs style CSS override issue; caught stale HTML serving"
     plan_revision:
       met: true
-      note: "Reframed score-hook to quality-gate when user clarified intent"
+      note: "Changed approach 3 times: attr→style, added logging, regenerated HTML"
     tool_switching:
       met: true
-      note: "N/A - no tool failures this session"
+      note: "N/A - switched debugging approaches effectively"
     memory_update:
       met: true
-      note: "Corrected stale Claude Code lesson about subagents"
+      note: "Captured SVG fill and HTML regeneration lessons"
     proof_generation:
       met: true
-      note: "1321→1350 tests, web sources cited, test output shown"
+      note: "Verified with curl, user confirmed working"
     stop_condition:
       met: true
-      note: "Presented bounded A/B/C options for quality gate approach"
+      note: "Asked user for specific console output to diagnose"
   total: 6
   level: "real_agent"
 
 # Archive reference
 archive:
   path: ".proof/archive.jsonl"
-  last_prune: "2026-01-03T15:00:00"
-  entries_archived: 133
+  last_prune: "2026-01-04T03:10:00"
+  entries_archived: 145

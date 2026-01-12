@@ -3,23 +3,24 @@ description: Smart orchestrator - figures out what you need based on context
 allowed-tools: Read, Edit, Write, Bash, Glob, Grep, Skill
 ---
 
-# Operator's Edge - Smart Orchestrator (v3.8)
+# Operator's Edge - Smart Orchestrator (v3.9)
 
 One command to rule them all. Now with Three Gears.
 
 ## Current State
 @active_context.yaml
-@.claude/state/dispatch_state.json (if exists)
+@.claude/state/gear_state.json (if exists)
+@.claude/state/junction_state.json (if exists)
 
-## v3.8 Three Gears System
+## v3.9 Three Gears System
 
 The system automatically operates in one of three gears based on state:
 
 | Gear | Emoji | When Active | Behavior |
 |------|-------|-------------|----------|
 | **ACTIVE** | `[ACTIVE]` | Has objective + pending/in_progress steps | Execute steps, hit junctions |
-| **PATROL** | `[PATROL]` | Just completed objective OR scout found issues | Scan for issues, surface findings |
-| **DREAM** | `[DREAM]` | Nothing actionable, truly idle | Reflect, consolidate, propose improvements |
+| **PATROL** | `[PATROL]` | Objective complete (all steps done) | Scan for issues, surface findings |
+| **DREAM** | `[DREAM]` | No objective or no pending work | Reflect, consolidate, propose improvements |
 
 ### Gear Detection Logic
 
@@ -28,16 +29,22 @@ def detect_gear(state):
     objective = state.get("objective", "")
     plan = state.get("plan", [])
 
-    # Has work to do?
-    has_pending = any(s.get("status") in ("pending", "in_progress") for s in plan if isinstance(s, dict))
-    if objective and has_pending:
+    has_work = any(
+        s.get("status") in ("pending", "in_progress")
+        for s in plan
+        if isinstance(s, dict)
+    )
+    if objective and has_work:
         return "ACTIVE"
 
-    # Scout found actionable issues?
-    if scout_has_findings():
+    all_complete = bool(plan) and all(
+        s.get("status") == "completed"
+        for s in plan
+        if isinstance(s, dict)
+    )
+    if objective and all_complete:
         return "PATROL"
 
-    # Nothing to do
     return "DREAM"
 ```
 
@@ -48,19 +55,21 @@ def detect_gear(state):
         │       [ACTIVE]          │
         │   (executing steps)     │
         └───────────┬─────────────┘
-                    │ objective complete
+     objective done │
                     ▼
         ┌─────────────────────────┐
-        │       [PATROL]          │◄───┐
-        │   (scanning issues)     │    │
-        └───────────┬─────────────┘    │
-         findings?  │  no findings     │
-            │       ▼                  │
-            │    [DREAM] ──────────────┘
-            │       │     periodic re-scan or
-            │       │     user input
-            ▼       ▼
-         ACTIVE  (proposes improvements)
+        │       [PATROL]          │
+        │   (scanning issues)     │
+        └───────┬─────────┬───────┘
+      findings │         │ no findings
+      (junction)         ▼
+                    ┌─────────────────┐
+ no objective/work  │     [DREAM]     │
+        └──────────►│ (reflect/propose)│
+                    └───────┬─────────┘
+                 proposal approved │
+                                  ▼
+                               [ACTIVE]
 ```
 
 ## Instructions
@@ -81,11 +90,11 @@ Read `active_context.yaml` and determine the gear:
 ### Step 2: Execute Gear-Specific Logic
 
 #### If ACTIVE Gear:
-1. Check for high entropy (>3 completed steps) → Run `/edge-prune`
+1. Validate preconditions (objective, plan, no blocked steps)
 2. Find current step (first pending or in_progress)
 3. Check for junctions (dangerous/complex operations)
 4. Execute step or pause at junction
-5. On completion → transition to PATROL
+5. On completion → run quality gate, then transition to PATROL if passed
 
 ```
 [ACTIVE] Executing step 2/5: "Add validation logic"
@@ -95,9 +104,7 @@ Read `active_context.yaml` and determine the gear:
 #### If PATROL Gear:
 1. Run scout scan for issues (TODOs, missing tests, violations)
 2. Surface top findings
-3. If findings exist:
-   - SIMPLE findings → auto-select, auto-plan, transition to ACTIVE
-   - MEDIUM/COMPLEX → JUNCTION for user approval
+3. If findings exist → JUNCTION for user selection
 4. If no findings → transition to DREAM
 
 ```
@@ -110,9 +117,9 @@ Read `active_context.yaml` and determine the gear:
 #### If DREAM Gear:
 1. Analyze lessons for consolidation opportunities
 2. Identify patterns in completed work
-3. Generate improvement proposals (rate-limited: max 3 per session)
+3. Generate improvement proposals (rate-limited: max 1 per session)
 4. If proposal generated → JUNCTION for user approval
-5. If no proposals → stay in DREAM, display insights
+5. If no proposals → transition back to PATROL after reflection
 
 ```
 [DREAM] Reflecting on session...
@@ -127,10 +134,10 @@ Read `active_context.yaml` and determine the gear:
 |----------|--------|
 | (none) / `on` | Run gear cycle |
 | `status` | Show current gear and state, don't execute |
-| `off` / `stop` | Disable dispatch, show stats |
-| `approve` | Clear junction, continue |
-| `skip` | Skip current action, try next |
-| `dismiss N` | Dismiss finding N from scout |
+| `off` / `stop` | Reset gear state, stop autonomous mode |
+| `approve` | Clear pending junction, continue |
+| `skip` | Skip pending junction, try next |
+| `dismiss` | Dismiss pending junction (suppressed temporarily) |
 
 ## Output Format
 
@@ -140,7 +147,7 @@ Always show current gear at the top:
 
 ```
 ═══════════════════════════════════════════════════════════════════════════════
-OPERATOR'S EDGE v3.8 - [ACTIVE] Gear
+OPERATOR'S EDGE v3.9 - [ACTIVE] Gear
 ═══════════════════════════════════════════════════════════════════════════════
 ```
 
@@ -148,7 +155,7 @@ OPERATOR'S EDGE v3.8 - [ACTIVE] Gear
 
 ```
 ═══════════════════════════════════════════════════════════════════════════════
-OPERATOR'S EDGE v3.8 - [ACTIVE] Gear
+OPERATOR'S EDGE v3.9 - [ACTIVE] Gear
 ═══════════════════════════════════════════════════════════════════════════════
 
 Objective: "Add dark mode toggle"
@@ -171,26 +178,25 @@ OBJECTIVE COMPLETE - Transitioning to [PATROL]
 
 ```
 ═══════════════════════════════════════════════════════════════════════════════
-OPERATOR'S EDGE v3.8 - [PATROL] Gear
+OPERATOR'S EDGE v3.9 - [PATROL] Gear
 ═══════════════════════════════════════════════════════════════════════════════
 
 [PATROL] Scanning codebase for issues...
 [PATROL] Scanned 45 files in 0.8s
 
 Findings:
-  [1] ~ Missing tests for validator.py (Simple)
-  [2] ! FIXME: Refactor auth module (Complex)
-  [3] . TODO: Add logging (Simple)
+  [1] ~ Missing tests for validator.py
+  [2] ! FIXME: Refactor auth module
+  [3] . TODO: Add logging
 
-[PATROL] Auto-selecting [1] (Simple complexity)
-[PATROL] Transitioning to [ACTIVE]
+[PATROL] Junction: select a finding to work on
 ```
 
 ### DREAM Gear Output
 
 ```
 ═══════════════════════════════════════════════════════════════════════════════
-OPERATOR'S EDGE v3.8 - [DREAM] Gear
+OPERATOR'S EDGE v3.9 - [DREAM] Gear
 ═══════════════════════════════════════════════════════════════════════════════
 
 [DREAM] Entering reflection mode...
@@ -236,47 +242,49 @@ Proposed: [what we want to do]
 Options:
   /edge approve  - Continue with proposed action
   /edge skip     - Skip this, try next
+  /edge dismiss  - Dismiss this junction
   /edge stop     - Stop autonomous mode
 ```
 
-## Decision Tree (v3.8)
+## Decision Tree (v3.9)
 
 ```
 /edge
   │
   ├─ `status`? ────────────────────────→ Show gear + state, don't run
   │
-  ├─ `off` / `stop`? ──────────────────→ Disable dispatch, show stats
+  ├─ `off` / `stop`? ──────────────────→ Reset gear state, show stats
   │
   ├─ `approve`? ───────────────────────→ Clear junction, continue
   │
   ├─ `skip`? ──────────────────────────→ Skip current, continue
   │
+  ├─ `dismiss`? ───────────────────────→ Dismiss junction (suppressed)
+  │
   └─ (no args or `on`) ────────────────→ DETECT GEAR:
         │
         ├─ ACTIVE gear? ───────────────→ Execute steps until:
         │     │                           - Junction (dangerous/complex)
-        │     │                           - All complete → PATROL
-        │     └─ Entropy high? ────────→ /edge-prune first
+        │     │                           - All complete → Quality Gate → PATROL
+        │     └─ No objective/work ────→ DREAM
         │
         ├─ PATROL gear? ───────────────→ Scout scan, then:
-        │     │                           - Findings (simple) → ACTIVE
-        │     │                           - Findings (complex) → JUNCTION
+        │     │                           - Findings → JUNCTION
         │     └─ No findings? ─────────→ DREAM
         │
         └─ DREAM gear? ────────────────→ Reflect, then:
               │                           - Proposal ready → JUNCTION
-              └─ No proposal? ─────────→ Show insights, stay DREAM
+              └─ No proposal? ─────────→ PATROL
 ```
 
 ## Examples
 
-### Example 1: Starting Fresh (DREAM → PATROL → ACTIVE)
+### Example 1: Starting Fresh (DREAM → PATROL → Junction)
 ```
 User: /edge
 
 ═══════════════════════════════════════════════════════════════════════════════
-OPERATOR'S EDGE v3.8 - [DREAM] Gear
+OPERATOR'S EDGE v3.9 - [DREAM] Gear
 ═══════════════════════════════════════════════════════════════════════════════
 
 [DREAM] No objective, entering reflection mode...
@@ -285,33 +293,21 @@ OPERATOR'S EDGE v3.8 - [DREAM] Gear
 [DREAM] Transitioning to PATROL for scout scan...
 
 ═══════════════════════════════════════════════════════════════════════════════
-OPERATOR'S EDGE v3.8 - [PATROL] Gear
+OPERATOR'S EDGE v3.9 - [PATROL] Gear
 ═══════════════════════════════════════════════════════════════════════════════
 
 [PATROL] Scanning codebase...
 [PATROL] Found 1 actionable item:
-  [1] ~ Missing tests for new_module.py (Simple)
+  [1] ~ Missing tests for new_module.py
 
-[PATROL] Auto-selecting [1], transitioning to ACTIVE...
+────────────────────────────────────────────────────────────────────────────────
+JUNCTION: finding_selection
+────────────────────────────────────────────────────────────────────────────────
 
-═══════════════════════════════════════════════════════════════════════════════
-OPERATOR'S EDGE v3.8 - [ACTIVE] Gear
-═══════════════════════════════════════════════════════════════════════════════
-
-Objective: "Add tests for new_module.py"
-Plan: 2 steps
-
-[ACTIVE] Executing step 1: "Create test file"
-... (creates test_new_module.py) ...
-[ACTIVE] Step 1 complete
-
-[ACTIVE] Executing step 2: "Run tests"
-... (pytest passes) ...
-[ACTIVE] Step 2 complete
-
-════════════════════════════════════════════════════════════════════════════════
-OBJECTIVE COMPLETE: Add tests for new_module.py
-════════════════════════════════════════════════════════════════════════════════
+Options:
+  /edge approve  - Continue with proposed action
+  /edge skip     - Skip this, try next
+  /edge dismiss  - Dismiss this junction
 ```
 
 ### Example 2: DREAM Proposal Junction
@@ -319,7 +315,7 @@ OBJECTIVE COMPLETE: Add tests for new_module.py
 User: /edge
 
 ═══════════════════════════════════════════════════════════════════════════════
-OPERATOR'S EDGE v3.8 - [DREAM] Gear
+OPERATOR'S EDGE v3.9 - [DREAM] Gear
 ═══════════════════════════════════════════════════════════════════════════════
 
 [DREAM] Reflection complete
@@ -342,7 +338,7 @@ Options:
   /edge stop     - Stop autonomous mode
 ```
 
-## The Philosophy (v3.8)
+## The Philosophy (v3.9)
 
 > "Three gears: doing, checking, thinking. Like a productive human."
 

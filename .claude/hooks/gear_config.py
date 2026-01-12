@@ -31,6 +31,7 @@ class Gear(Enum):
 class GearTransition(Enum):
     """Valid transitions between gears."""
     ACTIVE_TO_PATROL = "active_to_patrol"     # Objective completed
+    ACTIVE_TO_DREAM = "active_to_dream"       # Idle/no objective
     PATROL_TO_ACTIVE = "patrol_to_active"     # Finding selected
     PATROL_TO_DREAM = "patrol_to_dream"       # Nothing actionable found
     DREAM_TO_ACTIVE = "dream_to_active"       # Proposal approved or user input
@@ -167,6 +168,12 @@ TRANSITION_RULES = [
         condition="objective_completed",
         priority=100,
     ),
+    TransitionRule(
+        from_gear=Gear.ACTIVE,
+        to_gear=Gear.DREAM,
+        condition="no_objective_or_no_work",
+        priority=50,
+    ),
 
     # From PATROL
     TransitionRule(
@@ -217,15 +224,19 @@ class GearState:
     last_transition: Optional[str]  # Transition that got us here
     patrol_findings_count: int
     dream_proposals_count: int
+    last_run_at: Optional[str] = None  # ISO timestamp
+    completion_epoch: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
             "current_gear": self.current_gear.value,
             "entered_at": self.entered_at,
+            "last_run_at": self.last_run_at,
             "iterations": self.iterations,
             "last_transition": self.last_transition,
             "patrol_findings_count": self.patrol_findings_count,
             "dream_proposals_count": self.dream_proposals_count,
+            "completion_epoch": self.completion_epoch,
         }
 
     @classmethod
@@ -233,10 +244,12 @@ class GearState:
         return cls(
             current_gear=Gear(data.get("current_gear", "active")),
             entered_at=data.get("entered_at", datetime.now().isoformat()),
+            last_run_at=data.get("last_run_at"),
             iterations=data.get("iterations", 0),
             last_transition=data.get("last_transition"),
             patrol_findings_count=data.get("patrol_findings_count", 0),
             dream_proposals_count=data.get("dream_proposals_count", 0),
+            completion_epoch=data.get("completion_epoch"),
         )
 
 
@@ -245,10 +258,12 @@ def get_default_gear_state() -> GearState:
     return GearState(
         current_gear=Gear.ACTIVE,
         entered_at=datetime.now().isoformat(),
+        last_run_at=None,
         iterations=0,
         last_transition=None,
         patrol_findings_count=0,
         dream_proposals_count=0,
+        completion_epoch=None,
     )
 
 

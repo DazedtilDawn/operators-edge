@@ -20,7 +20,7 @@ This is the source of truth. It must contain:
 - `plan`: List of steps with `description`, `status`, `proof`
 - `current_step`: Which step you're on
 - `constraints`: Things that must not happen
-- `lessons`: What you've learned (carried forward)
+- `memory`: What you've learned (carried forward)
 
 **Status values**: `pending` | `in_progress` | `completed` | `blocked`
 
@@ -38,6 +38,11 @@ This is the source of truth. It must contain:
 - `/edge-plan` - Create or update the plan in `active_context.yaml`
 - `/edge-yolo` - Dispatch Mode - autopilot that runs until objective complete
 - `/edge-step` - Execute the current step
+
+## Canonical Contract
+
+The target contract for /edge and /edge-loop lives at:
+`docs/edge-command-contract.md` (includes current deviations from v3.9 behavior).
 
 ## Dispatch Mode (Autopilot)
 
@@ -66,7 +71,9 @@ Everything else (executing plan steps, read operations) runs automatically.
 ```
 active_context.yaml          # Your plan and progress (YAML, validated)
 .proof/session_log.jsonl     # Auto-captured proof of all actions
-.claude/state/dispatch_state.json  # Dispatch mode state
+.claude/state/gear_state.json      # Gear runtime state
+.claude/state/junction_state.json  # Junction gate state (source of truth)
+.claude/state/dispatch_state.json  # Dispatch mode state (edge-yolo)
 .claude/state/               # Hook state (hashes, failure logs)
 ```
 

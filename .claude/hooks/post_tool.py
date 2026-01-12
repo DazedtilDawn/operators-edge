@@ -21,7 +21,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from edge_utils import (
     get_proof_dir,
     log_failure,
-    log_proof
+    log_proof,
+    load_yaml_state,
+    get_evals_config,
+    auto_triage,
+    load_eval_state,
+    save_eval_state,
+    finish_eval_run,
+    normalize_current_step_file,
+    handle_eval_failure,
 )
 
 
@@ -104,11 +112,49 @@ def main():
                 print(f"❌ {test_summary}", file=sys.stderr)
                 print("⚠️  Consider amending the commit after fixing tests.", file=sys.stderr)
 
-    # For Edit/Write, log the file change
+    # For Edit/Write, log the file change with diff content
     elif tool_name in ("Edit", "Write", "NotebookEdit"):
         file_path = tool_input.get("file_path", "unknown")
         success = tool_result.get("success", True)
-        log_proof(tool_name, {"file": file_path}, f"Modified: {file_path}", success)
+
+        # Capture old_string/new_string for Edit operations (for diff preview)
+        if tool_name == "Edit":
+            old_string = tool_input.get("old_string", "")
+            new_string = tool_input.get("new_string", "")
+            log_proof(tool_name, {
+                "file": file_path,
+                "old_string": old_string[:2000] if old_string else "",  # Truncate large diffs
+                "new_string": new_string[:2000] if new_string else ""
+            }, f"Modified: {file_path}", success)
+        else:
+            log_proof(tool_name, {"file": file_path}, f"Modified: {file_path}", success)
+
+        # Auto-normalize current_step when active_context.yaml is edited
+        if "active_context.yaml" in file_path:
+            normalize_current_step_file()
+
+        # Eval automation: finalize eval run for write/edit tools
+        eval_state = load_eval_state()
+        pending_run = eval_state.get("pending_run")
+        if pending_run and pending_run.get("tool") == tool_name:
+            state = load_yaml_state()
+            evals_config = get_evals_config(state)
+            evals_config, _triage = auto_triage(state, evals_config, tool_name)
+
+            if evals_config.get("enabled", True) and evals_config.get("mode") != "manual":
+                if evals_config.get("level", 0) >= 1:
+                    eval_entry = finish_eval_run(pending_run, evals_config, success)
+
+                    # Auto-mismatch on eval failure (v3.9.8)
+                    if eval_entry and eval_entry.get("invariants_failed"):
+                        handle_eval_failure(eval_entry)
+
+            eval_state["last_run"] = pending_run
+            eval_state["pending_run"] = None
+            save_eval_state(eval_state)
+        elif pending_run:
+            eval_state["pending_run"] = None
+            save_eval_state(eval_state)
 
     # For Read, just note what was read (lightweight)
     elif tool_name == "Read":

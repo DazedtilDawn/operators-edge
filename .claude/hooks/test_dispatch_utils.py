@@ -367,20 +367,23 @@ class TestDispatchFlowFunctions(unittest.TestCase):
         self.assertEqual(result["state"], DispatchState.IDLE.value)
         mock_save.assert_called()
 
+    @patch('dispatch_utils.set_pending_junction')
     @patch('dispatch_utils.save_dispatch_state')
-    def test_pause_at_junction(self, mock_save):
+    def test_pause_at_junction(self, mock_save, mock_set_pending):
         """pause_at_junction() should set junction state."""
         from dispatch_utils import pause_at_junction
 
         state = {"stats": {}}
+        mock_set_pending.return_value = {"id": "test-junction"}
         pause_at_junction(state, JunctionType.IRREVERSIBLE, "Push detected")
 
         self.assertEqual(state["state"], DispatchState.JUNCTION.value)
         self.assertIsNotNone(state["junction"])
         self.assertEqual(state["junction"]["type"], JunctionType.IRREVERSIBLE.value)
 
+    @patch('dispatch_utils.clear_pending_junction')
     @patch('dispatch_utils.save_dispatch_state')
-    def test_resume_from_junction(self, mock_save):
+    def test_resume_from_junction(self, mock_save, mock_clear):
         """resume_from_junction() should clear junction."""
         from dispatch_utils import resume_from_junction
 
@@ -417,10 +420,12 @@ class TestGetDispatchStatus(unittest.TestCase):
 
     @patch('dispatch_utils.load_yaml_state')
     @patch('dispatch_utils.load_dispatch_state')
-    def test_returns_status_dict(self, mock_dispatch, mock_yaml):
+    @patch('dispatch_utils.get_pending_junction')
+    def test_returns_status_dict(self, mock_pending, mock_dispatch, mock_yaml):
         """get_dispatch_status() should return complete status."""
         from dispatch_utils import get_dispatch_status
 
+        mock_pending.return_value = None
         mock_dispatch.return_value = {
             "enabled": True,
             "state": "running",

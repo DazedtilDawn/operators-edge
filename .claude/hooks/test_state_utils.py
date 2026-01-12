@@ -320,5 +320,239 @@ class TestStateHelpers(unittest.TestCase):
         self.assertTrue(id1.startswith("mismatch-"))
 
 
+class TestComputeNormalizedCurrentStep(unittest.TestCase):
+    """Tests for compute_normalized_current_step() normalization logic."""
+
+    def test_none_state_returns_none(self):
+        """compute_normalized_current_step() returns None for None state."""
+        from state_utils import compute_normalized_current_step
+        self.assertIsNone(compute_normalized_current_step(None))
+
+    def test_non_dict_state_returns_none(self):
+        """compute_normalized_current_step() returns None for non-dict state."""
+        from state_utils import compute_normalized_current_step
+        self.assertIsNone(compute_normalized_current_step("not a dict"))
+        self.assertIsNone(compute_normalized_current_step([1, 2, 3]))
+
+    def test_missing_plan_returns_none(self):
+        """compute_normalized_current_step() returns None if plan missing."""
+        from state_utils import compute_normalized_current_step
+        self.assertIsNone(compute_normalized_current_step({}))
+        self.assertIsNone(compute_normalized_current_step({"objective": "test"}))
+
+    def test_non_list_plan_returns_none(self):
+        """compute_normalized_current_step() returns None for non-list plan."""
+        from state_utils import compute_normalized_current_step
+        self.assertIsNone(compute_normalized_current_step({"plan": "not a list"}))
+        self.assertIsNone(compute_normalized_current_step({"plan": {"key": "value"}}))
+
+    def test_empty_plan_returns_zero(self):
+        """compute_normalized_current_step() returns 0 for empty plan."""
+        from state_utils import compute_normalized_current_step
+        self.assertEqual(compute_normalized_current_step({"plan": []}), 0)
+
+    def test_all_completed_returns_len_plus_one(self):
+        """compute_normalized_current_step() returns len(plan)+1 when all completed."""
+        from state_utils import compute_normalized_current_step
+
+        # 3 steps all completed -> should return 4
+        state = {
+            "plan": [
+                {"description": "Step 1", "status": "completed"},
+                {"description": "Step 2", "status": "completed"},
+                {"description": "Step 3", "status": "completed"}
+            ]
+        }
+        self.assertEqual(compute_normalized_current_step(state), 4)
+
+        # 1 step completed -> should return 2
+        state_single = {
+            "plan": [{"description": "Step 1", "status": "completed"}]
+        }
+        self.assertEqual(compute_normalized_current_step(state_single), 2)
+
+    def test_pending_step_returns_none(self):
+        """compute_normalized_current_step() returns None if any step pending."""
+        from state_utils import compute_normalized_current_step
+
+        state = {
+            "plan": [
+                {"description": "Step 1", "status": "completed"},
+                {"description": "Step 2", "status": "pending"},
+                {"description": "Step 3", "status": "completed"}
+            ]
+        }
+        self.assertIsNone(compute_normalized_current_step(state))
+
+    def test_in_progress_step_returns_none(self):
+        """compute_normalized_current_step() returns None if any step in_progress."""
+        from state_utils import compute_normalized_current_step
+
+        state = {
+            "plan": [
+                {"description": "Step 1", "status": "completed"},
+                {"description": "Step 2", "status": "in_progress"}
+            ]
+        }
+        self.assertIsNone(compute_normalized_current_step(state))
+
+    def test_blocked_step_returns_none(self):
+        """compute_normalized_current_step() returns None if any step blocked."""
+        from state_utils import compute_normalized_current_step
+
+        state = {
+            "plan": [
+                {"description": "Step 1", "status": "completed"},
+                {"description": "Step 2", "status": "blocked"}
+            ]
+        }
+        self.assertIsNone(compute_normalized_current_step(state))
+
+    def test_non_dict_step_returns_none(self):
+        """compute_normalized_current_step() returns None if step is not a dict."""
+        from state_utils import compute_normalized_current_step
+
+        state = {
+            "plan": [
+                {"description": "Step 1", "status": "completed"},
+                "not a dict"
+            ]
+        }
+        self.assertIsNone(compute_normalized_current_step(state))
+
+
+class TestNormalizeCurrentStepFile(unittest.TestCase):
+    """Tests for normalize_current_step_file() file operations."""
+
+    @patch('state_utils.load_yaml_state')
+    def test_missing_state_returns_false(self, mock_load):
+        """normalize_current_step_file() returns False for missing state."""
+        from state_utils import normalize_current_step_file
+
+        mock_load.return_value = None
+        updated, msg = normalize_current_step_file()
+        self.assertFalse(updated)
+        self.assertIn("missing", msg.lower())
+
+    @patch('state_utils.load_yaml_state')
+    @patch('state_utils.compute_normalized_current_step')
+    def test_no_normalization_needed_returns_false(self, mock_compute, mock_load):
+        """normalize_current_step_file() returns False when no normalization needed."""
+        from state_utils import normalize_current_step_file
+
+        mock_load.return_value = {"plan": [{"status": "pending"}]}
+        mock_compute.return_value = None
+
+        updated, msg = normalize_current_step_file()
+        self.assertFalse(updated)
+        self.assertIn("no normalization", msg.lower())
+
+    @patch('state_utils.load_yaml_state')
+    @patch('state_utils.compute_normalized_current_step')
+    def test_already_normalized_returns_false(self, mock_compute, mock_load):
+        """normalize_current_step_file() returns False if already at target value."""
+        from state_utils import normalize_current_step_file
+
+        mock_load.return_value = {"current_step": 4}
+        mock_compute.return_value = 4
+
+        updated, msg = normalize_current_step_file()
+        self.assertFalse(updated)
+        self.assertIn("already normalized", msg.lower())
+
+    @patch('state_utils.get_project_dir')
+    def test_successful_normalization(self, mock_project_dir):
+        """normalize_current_step_file() updates file when normalization needed."""
+        from state_utils import normalize_current_step_file
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_project_dir.return_value = Path(tmpdir)
+
+            # Create a test YAML file with completed plan but wrong current_step
+            yaml_content = """objective: "Test"
+current_step: 2
+plan:
+  - description: "Step 1"
+    status: completed
+  - description: "Step 2"
+    status: completed
+  - description: "Step 3"
+    status: completed
+"""
+            yaml_file = Path(tmpdir) / "active_context.yaml"
+            yaml_file.write_text(yaml_content)
+
+            updated, msg = normalize_current_step_file()
+
+            self.assertTrue(updated)
+            self.assertIn("4", msg)  # Should normalize to 4 (len=3 + 1)
+
+            # Verify file was updated
+            new_content = yaml_file.read_text()
+            self.assertIn("current_step: 4", new_content)
+
+    @patch('state_utils.get_project_dir')
+    def test_preserves_yaml_structure(self, mock_project_dir):
+        """normalize_current_step_file() preserves other YAML content."""
+        from state_utils import normalize_current_step_file
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_project_dir.return_value = Path(tmpdir)
+
+            yaml_content = """# Comment at top
+objective: "Test objective"
+current_step: 1
+plan:
+  - description: "Step 1"
+    status: completed
+constraints:
+  - "Keep it simple"
+memory:
+  - trigger: "test"
+    lesson: "Test lesson"
+"""
+            yaml_file = Path(tmpdir) / "active_context.yaml"
+            yaml_file.write_text(yaml_content)
+
+            updated, msg = normalize_current_step_file()
+            self.assertTrue(updated)
+
+            new_content = yaml_file.read_text()
+
+            # Verify structure preserved
+            self.assertIn("# Comment at top", new_content)
+            self.assertIn('objective: "Test objective"', new_content)
+            self.assertIn("current_step: 2", new_content)  # Updated
+            self.assertIn("constraints:", new_content)
+            self.assertIn('- "Keep it simple"', new_content)
+            self.assertIn("memory:", new_content)
+
+    @patch('state_utils.get_project_dir')
+    def test_handles_indented_current_step(self, mock_project_dir):
+        """normalize_current_step_file() handles current_step with indentation."""
+        from state_utils import normalize_current_step_file
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_project_dir.return_value = Path(tmpdir)
+
+            # Some YAML might have current_step indented (though not typical)
+            yaml_content = """objective: "Test"
+  current_step: 1
+plan:
+  - description: "Step 1"
+    status: completed
+"""
+            yaml_file = Path(tmpdir) / "active_context.yaml"
+            yaml_file.write_text(yaml_content)
+
+            # This should fail because our parser might not match indented current_step
+            # at root level - testing edge case behavior
+            updated, msg = normalize_current_step_file()
+            # Either it updates or gracefully fails
+            if updated:
+                new_content = yaml_file.read_text()
+                self.assertIn("current_step: 2", new_content)
+
+
 if __name__ == '__main__':
     unittest.main()

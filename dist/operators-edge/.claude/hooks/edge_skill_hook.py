@@ -8,7 +8,6 @@ providing mechanical enforcement instead of behavioral compliance.
 
 Triggered by: UserPromptSubmit (matcher: "/edge")
 """
-import json
 import os
 import sys
 from pathlib import Path
@@ -31,6 +30,11 @@ from gear_config import (
     GEAR_EMOJI,
 )
 from state_utils import load_yaml_state
+from junction_utils import (
+    get_pending_junction,
+    set_pending_junction,
+    clear_pending_junction,
+)
 
 
 def parse_edge_args(user_input: str) -> dict:
@@ -79,6 +83,7 @@ def handle_status() -> str:
     gear_state = load_gear_state()
     state = load_yaml_state() or {}
     detected = detect_current_gear(state)
+    pending_junction = get_pending_junction()
 
     lines = [
         "=" * 70,
@@ -94,9 +99,16 @@ def handle_status() -> str:
 
     plan = state.get("plan", [])
     if plan:
-        pending = sum(1 for s in plan if isinstance(s, dict) and s.get("status") == "pending")
+        pending_steps_count = sum(1 for s in plan if isinstance(s, dict) and s.get("status") == "pending")
         completed = sum(1 for s in plan if isinstance(s, dict) and s.get("status") == "completed")
-        lines.append(f"Plan: {len(plan)} steps ({completed} completed, {pending} pending)")
+        lines.append(f"Plan: {len(plan)} steps ({completed} completed, {pending_steps_count} pending)")
+
+    if pending_junction:
+        reason = (pending_junction.get("payload") or {}).get("reason", "No reason provided")
+        lines.extend([
+            "",
+            f"Pending junction: {pending_junction.get('type')} - {reason}",
+        ])
 
     lines.extend(["", "=" * 70])
     return "\n".join(lines)
@@ -125,50 +137,67 @@ def handle_stop() -> str:
     return "\n".join(lines)
 
 
-def handle_approve() -> str:
+def handle_approve() -> tuple[str, bool]:
     """Handle /edge approve - clear junction and continue."""
-    # Load dispatch state to check for pending junction
-    state_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", ".")) / ".claude" / "state"
-    dispatch_file = state_dir / "dispatch_state.json"
-
-    if dispatch_file.exists():
-        try:
-            dispatch = json.loads(dispatch_file.read_text())
-            if dispatch.get("pending_junction"):
-                # Clear the junction
-                dispatch["pending_junction"] = None
-                dispatch["junction_type"] = None
-                dispatch_file.write_text(json.dumps(dispatch, indent=2))
-                return "[APPROVED] Junction cleared. Continuing execution..."
-        except (json.JSONDecodeError, IOError):
-            pass
-
-    return "[APPROVE] No pending junction found. Running gear cycle..."
+    try:
+        pending = clear_pending_junction("approve")
+    except TimeoutError as exc:
+        return (f"[ERROR] State lock busy while clearing junction. {exc}", False)
+    if pending:
+        return ("[APPROVED] Junction cleared. Continuing execution...", True)
+    return ("[APPROVE] No pending junction found. Running gear cycle...", True)
 
 
-def handle_skip() -> str:
+def handle_skip() -> tuple[str, bool]:
     """Handle /edge skip - skip current action."""
-    state_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", ".")) / ".claude" / "state"
-    dispatch_file = state_dir / "dispatch_state.json"
+    pending = get_pending_junction()
+    junction_type = pending.get("type", "unknown") if pending else "unknown"
+    try:
+        cleared = clear_pending_junction("skip")
+    except TimeoutError as exc:
+        return (f"[ERROR] State lock busy while skipping junction. {exc}", False)
+    if cleared:
+        return (f"[SKIPPED] {junction_type} junction skipped. Trying next action...", True)
+    return ("[SKIP] Nothing to skip. Running gear cycle...", True)
 
-    if dispatch_file.exists():
-        try:
-            dispatch = json.loads(dispatch_file.read_text())
-            if dispatch.get("pending_junction"):
-                junction_type = dispatch.get("junction_type", "unknown")
-                dispatch["pending_junction"] = None
-                dispatch["junction_type"] = None
-                dispatch["skipped_last"] = True
-                dispatch_file.write_text(json.dumps(dispatch, indent=2))
-                return f"[SKIPPED] {junction_type} junction skipped. Trying next action..."
-        except (json.JSONDecodeError, IOError):
-            pass
 
-    return "[SKIP] Nothing to skip. Running gear cycle..."
+def handle_dismiss() -> tuple[str, bool]:
+    """Handle /edge dismiss - dismiss current junction temporarily."""
+    pending = get_pending_junction()
+    junction_type = pending.get("type", "unknown") if pending else "unknown"
+    try:
+        cleared = clear_pending_junction("dismiss")
+    except TimeoutError as exc:
+        return (f"[ERROR] State lock busy while dismissing junction. {exc}", False)
+    if cleared:
+        return (f"[DISMISSED] {junction_type} junction dismissed. Continuing...", True)
+    return ("[DISMISS] Nothing to dismiss. Running gear cycle...", True)
 
 
 def handle_run(args: str = "") -> str:
     """Handle /edge (run) - execute gear cycle."""
+    pending = get_pending_junction()
+    if pending:
+        reason = (pending.get("payload") or {}).get("reason", "No reason provided")
+        lines = [
+            "=" * 70,
+            "OPERATOR'S EDGE v3.9 - JUNCTION PENDING",
+            "=" * 70,
+            "",
+            f"JUNCTION: {pending.get('type')}",
+            "",
+            f"Reason: {reason}",
+            "",
+            "Options:",
+            "  /edge approve  - Continue with proposed action",
+            "  /edge skip     - Skip this, try next",
+            "  /edge dismiss  - Dismiss this junction",
+            "  /edge stop     - Stop autonomous mode",
+            "",
+            "=" * 70,
+        ]
+        return "\n".join(lines)
+
     state = load_yaml_state() or {}
     project_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", "."))
 
@@ -217,7 +246,20 @@ def handle_run(args: str = "") -> str:
         ])
 
         # Save junction state for approve/skip handling
-        _save_junction_state(result.junction_type, result.junction_reason)
+        try:
+            set_pending_junction(
+                result.junction_type,
+                {"reason": result.junction_reason, "gear": gear_name.lower()},
+                source="edge"
+            )
+        except TimeoutError as exc:
+            lines.extend([
+                "",
+                f"[ERROR] State lock busy while saving junction. {exc}",
+                "Try again in a moment. If this persists, ensure no other /edge run is active.",
+                "=" * 70,
+            ])
+            return "\n".join(lines)
 
     # Add continuation hint
     if result.continue_loop and not result.junction_hit:
@@ -228,27 +270,6 @@ def handle_run(args: str = "") -> str:
 
     lines.extend(["", "=" * 70])
     return "\n".join(lines)
-
-
-def _save_junction_state(junction_type: str, reason: str):
-    """Save junction state for later approve/skip handling."""
-    state_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", ".")) / ".claude" / "state"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    dispatch_file = state_dir / "dispatch_state.json"
-
-    try:
-        if dispatch_file.exists():
-            dispatch = json.loads(dispatch_file.read_text())
-        else:
-            dispatch = {"enabled": True, "iteration": 0}
-
-        dispatch["pending_junction"] = True
-        dispatch["junction_type"] = junction_type
-        dispatch["junction_reason"] = reason
-
-        dispatch_file.write_text(json.dumps(dispatch, indent=2))
-    except (json.JSONDecodeError, IOError):
-        pass
 
 
 def main():
@@ -278,15 +299,20 @@ def main():
     elif command in ("off", "stop"):
         print(handle_stop())
     elif command == "approve":
-        result = handle_approve()
-        print(result)
-        if "Continuing" in result or "No pending" in result:
+        message, should_run = handle_approve()
+        print(message)
+        if should_run:
             # Also run a gear cycle after approving
             print(handle_run())
     elif command == "skip":
-        result = handle_skip()
-        print(result)
-        if "Trying next" in result or "Nothing to skip" in result:
+        message, should_run = handle_skip()
+        print(message)
+        if should_run:
+            print(handle_run())
+    elif command == "dismiss":
+        message, should_run = handle_dismiss()
+        print(message)
+        if should_run:
             print(handle_run())
     else:
         # Default: run gear cycle

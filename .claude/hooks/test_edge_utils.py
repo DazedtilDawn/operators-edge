@@ -266,6 +266,27 @@ class TestOrchestrationUtilsReExports(unittest.TestCase):
         from edge_utils import reinforce_memory
         self.assertTrue(callable(reinforce_memory))
 
+    def test_eval_utils_exports(self):
+        """Eval helpers should be importable."""
+        from edge_utils import (
+            DEFAULT_EVALS_CONFIG,
+            get_evals_config,
+            auto_triage,
+            start_eval_run,
+            finish_eval_run,
+            log_eval_run,
+            load_eval_runs,
+            has_eval_run_since,
+        )
+        self.assertIsInstance(DEFAULT_EVALS_CONFIG, dict)
+        self.assertTrue(callable(get_evals_config))
+        self.assertTrue(callable(auto_triage))
+        self.assertTrue(callable(start_eval_run))
+        self.assertTrue(callable(finish_eval_run))
+        self.assertTrue(callable(log_eval_run))
+        self.assertTrue(callable(load_eval_runs))
+        self.assertTrue(callable(has_eval_run_since))
+
     def test_lesson_themes_exported(self):
         """LESSON_THEMES should be importable."""
         from edge_utils import LESSON_THEMES

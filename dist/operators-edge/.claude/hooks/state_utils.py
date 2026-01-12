@@ -2,26 +2,52 @@
 """
 Operator's Edge - State Utilities
 Core state management: paths, YAML parsing, hashing, logging.
+
+NOTE: This module is platform-agnostic. It auto-detects:
+  - Claude Code (CLAUDE_PROJECT_DIR)
+  - Codex CLI (CODEX_PROJECT_DIR)
+  - Generic (current working directory)
 """
 import hashlib
+import re
 import json
 import os
 import sys
+import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
 
 # =============================================================================
-# PATH UTILITIES
+# PATH UTILITIES (Platform-Agnostic)
 # =============================================================================
 
 def get_project_dir():
-    """Get the project directory from environment."""
-    return Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()))
+    """
+    Get the project directory, auto-detecting platform.
+
+    Priority:
+        1. CLAUDE_PROJECT_DIR (Claude Code)
+        2. CODEX_PROJECT_DIR (Codex CLI)
+        3. Current working directory (fallback)
+    """
+    # Claude Code sets this
+    claude_dir = os.environ.get("CLAUDE_PROJECT_DIR")
+    if claude_dir:
+        return Path(claude_dir)
+
+    # Codex CLI may set this
+    codex_dir = os.environ.get("CODEX_PROJECT_DIR")
+    if codex_dir:
+        return Path(codex_dir)
+
+    # Fallback to current directory
+    return Path(os.getcwd())
 
 
 def get_state_dir():
-    """Get the .claude/state directory."""
+    """Get the .claude/state directory (used by both platforms for compatibility)."""
     return get_project_dir() / ".claude" / "state"
 
 
@@ -33,6 +59,147 @@ def get_proof_dir():
 def get_archive_file():
     """Get the archive file path."""
     return get_proof_dir() / "archive.jsonl"
+
+
+# =============================================================================
+# FILE LOCKING + ATOMIC WRITES
+# =============================================================================
+
+DEFAULT_LOCK_TIMEOUT = 5.0
+DEFAULT_LOCK_POLL = 0.1
+
+
+def _lock_path_for(target_path: Path) -> Path:
+    """Create a lock path alongside the target file."""
+    target = Path(target_path)
+    return target.with_suffix(target.suffix + ".lock")
+
+
+@contextmanager
+def _read_lock_info(lock_path: Path) -> dict:
+    """Read lock metadata from file."""
+    try:
+        raw = lock_path.read_text().strip()
+    except Exception:
+        return {}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+
+
+def _pid_alive(pid: int) -> bool:
+    """Best-effort check for a live PID (cross-platform)."""
+    if pid is None:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+@contextmanager
+def file_lock(target_path: Path, timeout_seconds: float = DEFAULT_LOCK_TIMEOUT,
+              poll_interval: float = DEFAULT_LOCK_POLL):
+    """Acquire a simple lock file to serialize writes."""
+    lock_path = _lock_path_for(target_path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    start = time.time()
+    fd = None
+    host_name = "unknown"
+    try:
+        if hasattr(os, "uname"):
+            host_name = os.uname().nodename
+    except Exception:
+        host_name = "unknown"
+
+    lock_info = {
+        "pid": os.getpid(),
+        "created_at": datetime.now().isoformat(),
+        "host": host_name,
+    }
+
+    while True:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, json.dumps(lock_info).encode("utf-8"))
+            break
+        except FileExistsError:
+            # Attempt stale lock recovery
+            info = _read_lock_info(lock_path)
+            age_ok = False
+            try:
+                created = info.get("created_at")
+                if created:
+                    created_ts = datetime.fromisoformat(created).timestamp()
+                    age_ok = (time.time() - created_ts) > timeout_seconds
+                else:
+                    # Legacy/unknown lock format - allow stale recovery
+                    age_ok = True
+            except Exception:
+                age_ok = True
+
+            pid = info.get("pid")
+            if age_ok and not _pid_alive(pid):
+                try:
+                    lock_path.unlink()
+                    continue
+                except FileNotFoundError:
+                    continue
+                except Exception:
+                    pass
+
+            if time.time() - start >= timeout_seconds:
+                raise TimeoutError(f"Timeout acquiring lock for {target_path}")
+            time.sleep(poll_interval)
+        except OSError:
+            # Unexpected OS error - surface as a timeout-style failure
+            raise TimeoutError(f"Failed acquiring lock for {target_path}")
+
+    try:
+        yield
+    finally:
+        try:
+            if fd is not None:
+                os.close(fd)
+        finally:
+            try:
+                lock_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def atomic_write_text(path: Path, content: str) -> None:
+    """Write a file atomically by writing to a temp file and renaming."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(f"{path.suffix}.tmp-{os.getpid()}-{int(time.time() * 1000)}")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        f.write(content)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, path)
+
+
+def atomic_write_json(path: Path, data: dict, indent: int = 2) -> None:
+    """Serialize JSON and write atomically."""
+    payload = json.dumps(data, indent=indent)
+    atomic_write_text(path, payload)
+
+
+def write_text_atomic(path: Path, content: str,
+                      timeout_seconds: float = DEFAULT_LOCK_TIMEOUT) -> None:
+    """Lock + atomic write for text files."""
+    with file_lock(path, timeout_seconds=timeout_seconds):
+        atomic_write_text(path, content)
+
+
+def write_json_atomic(path: Path, data: dict, indent: int = 2,
+                      timeout_seconds: float = DEFAULT_LOCK_TIMEOUT) -> None:
+    """Lock + atomic write for JSON files."""
+    with file_lock(path, timeout_seconds=timeout_seconds):
+        atomic_write_json(path, data, indent=indent)
 
 
 # =============================================================================
@@ -305,6 +472,72 @@ def load_yaml_state():
         return None
 
 
+def compute_normalized_current_step(state):
+    """
+    Compute the normalized current_step for unambiguous plan states.
+
+    Rules:
+      - If plan is empty: return 0
+      - If all steps are completed: return len(plan) + 1
+      - Otherwise: return None (no normalization)
+    """
+    if not state or not isinstance(state, dict):
+        return None
+
+    plan = state.get("plan")
+    if plan is None or not isinstance(plan, list):
+        return None
+
+    if len(plan) == 0:
+        return 0
+
+    for step in plan:
+        if not isinstance(step, dict):
+            return None
+        if step.get("status") != "completed":
+            return None
+
+    return len(plan) + 1
+
+
+def normalize_current_step_file():
+    """
+    Normalize current_step in active_context.yaml using a targeted line replace.
+    Returns (updated: bool, message: str).
+    """
+    state = load_yaml_state()
+    if not state:
+        return (False, "State missing or invalid")
+
+    desired = compute_normalized_current_step(state)
+    if desired is None:
+        return (False, "No normalization needed")
+
+    current = state.get("current_step")
+    if current == desired:
+        return (False, "Already normalized")
+
+    yaml_file = get_project_dir() / "active_context.yaml"
+    try:
+        lines = yaml_file.read_text().splitlines(keepends=True)
+    except Exception as exc:
+        return (False, f"Could not read state file: {exc}")
+
+    pattern = re.compile(r'^(\s*)current_step:\s*.*$')
+    for idx, line in enumerate(lines):
+        match = pattern.match(line)
+        if match:
+            indent = match.group(1)
+            lines[idx] = f"{indent}current_step: {desired}\n"
+            try:
+                write_text_atomic(yaml_file, ''.join(lines))
+            except Exception as exc:
+                return (False, f"Could not write state file: {exc}")
+            return (True, f"Normalized current_step to {desired}")
+
+    return (False, "current_step line not found")
+
+
 # =============================================================================
 # HASHING
 # =============================================================================
@@ -325,7 +558,10 @@ def save_state_hash():
     yaml_file = get_project_dir() / "active_context.yaml"
     h = file_hash(yaml_file)
     if h:
-        (state_dir / "session_start_hash").write_text(h)
+        try:
+            atomic_write_text(state_dir / "session_start_hash", h)
+        except Exception:
+            pass
     return h
 
 
@@ -393,10 +629,18 @@ def log_proof(tool_name, tool_input, result, success):
     proof_dir.mkdir(parents=True, exist_ok=True)
 
     log_file = proof_dir / "session_log.jsonl"
+
+    # Preserve dict structure if it's a dict (for Edit old_string/new_string)
+    # Otherwise convert to string preview
+    if isinstance(tool_input, dict):
+        input_data = tool_input
+    else:
+        input_data = str(tool_input)[:500]
+
     entry = {
         "timestamp": datetime.now().isoformat(),
         "tool": tool_name,
-        "input_preview": str(tool_input)[:500],
+        "input_preview": input_data,
         "success": success,
         "output_preview": str(result)[:1000] if result else None
     }
