@@ -175,14 +175,30 @@ self_score:
 
 ## 8. Commands Reference
 
+### v4.0 Mode Commands (Preferred)
+
 | Command | Purpose |
 |---------|---------|
-| `/edge` | Smart orchestrator - figures out what you need |
-| `/edge-plan` | Create or update plan |
-| `/edge-step` | Execute current step |
+| `/edge` | Smart orchestrator with mode awareness |
+| `/edge plan` | Enter PLAN mode - explore and create plan |
+| `/edge active` | Enter ACTIVE mode - execute plan steps |
+| `/edge review` | Enter REVIEW mode - verify completion |
+| `/edge done` | Enter DONE mode - archive and clear |
+
+### Other Commands
+
+| Command | Purpose |
+|---------|---------|
 | `/edge-yolo` | Dispatch mode (autopilot) |
 | `/edge-prune` | Reduce state entropy |
 | `/edge-research` | Generate research prompts |
+
+### Legacy Commands (Still Work)
+
+| Command | Suggested Alternative |
+|---------|----------------------|
+| `/edge-plan` | `/edge plan` |
+| `/edge-step` | `/edge` in ACTIVE mode |
 
 ---
 

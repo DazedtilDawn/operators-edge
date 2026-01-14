@@ -459,5 +459,195 @@ class TestGetMemorySummary(unittest.TestCase):
         self.assertEqual(len(result["items"]), 1)
 
 
+# =============================================================================
+# v3.12: Auto-Learn File Patterns - Zero Config Lesson Targeting
+# =============================================================================
+
+class TestInferFilePattern(unittest.TestCase):
+    """Tests for infer_file_pattern function."""
+
+    def test_returns_none_for_small_sample(self):
+        """Should return None when sample size is too small."""
+        paths = ["/a/b.py", "/c/d.py"]
+        result = memory_utils.infer_file_pattern(paths)
+        self.assertIsNone(result)
+
+    def test_infers_extension_pattern(self):
+        """Should infer extension pattern from consistent extensions."""
+        paths = [
+            "/src/a.py",
+            "/lib/b.py",
+            "/tests/c.py",
+            "/utils/d.py",
+        ]
+        result = memory_utils.infer_file_pattern(paths)
+        self.assertIsNotNone(result)
+        self.assertIn(".py", result)
+
+    def test_infers_directory_pattern(self):
+        """Should infer directory pattern from common path."""
+        paths = [
+            "/project/src/file1.ts",
+            "/project/src/file2.ts",
+            "/project/src/file3.ts",
+        ]
+        result = memory_utils.infer_file_pattern(paths)
+        self.assertIsNotNone(result)
+        self.assertIn("/project/src/", result)
+
+    def test_handles_mixed_extensions(self):
+        """Should handle mixed extensions when >=90% are same type."""
+        paths = [
+            "/a/file1.py",
+            "/b/file2.py",
+            "/c/file3.py",
+            "/d/file4.py",
+            "/e/file5.py",
+            "/f/file6.py",
+            "/g/file7.py",
+            "/h/file8.py",
+            "/i/file9.py",
+            "/j/file10.js",  # Minority - only 10%
+        ]
+        result = memory_utils.infer_file_pattern(paths)
+        # 90% .py meets threshold
+        self.assertIsNotNone(result)
+        self.assertIn(".py", result)
+
+
+class TestMatchesLearnedPattern(unittest.TestCase):
+    """Tests for matches_learned_pattern function."""
+
+    def test_returns_true_when_no_pattern(self):
+        """Should return True when lesson has no learned patterns."""
+        lesson = {"trigger": "test", "lesson": "Test"}
+        self.assertTrue(memory_utils.matches_learned_pattern(lesson, "/any/file.py"))
+
+    def test_returns_true_for_low_confidence(self):
+        """Should return True when pattern coverage is low."""
+        lesson = {
+            "trigger": "test",
+            "learned_patterns": {
+                "inferred_pattern": "**/*.py",
+                "coverage": 0.5  # Below 0.7 threshold
+            }
+        }
+        # Should not enforce low-confidence pattern
+        self.assertTrue(memory_utils.matches_learned_pattern(lesson, "/any/file.js"))
+
+    def test_matches_file_path(self):
+        """Should return True when file matches pattern."""
+        lesson = {
+            "trigger": "test",
+            "learned_patterns": {
+                "inferred_pattern": "**/*.py",
+                "coverage": 0.85
+            }
+        }
+        self.assertTrue(memory_utils.matches_learned_pattern(lesson, "/src/utils.py"))
+
+    def test_rejects_non_matching_file(self):
+        """Should return False when file doesn't match pattern."""
+        lesson = {
+            "trigger": "test",
+            "learned_patterns": {
+                "inferred_pattern": "**/*.py",
+                "coverage": 0.85
+            }
+        }
+        self.assertFalse(memory_utils.matches_learned_pattern(lesson, "/src/config.json"))
+
+
+class TestSurfaceRelevantMemoryWithFilePath(unittest.TestCase):
+    """Tests for surface_relevant_memory with file_path filtering (v3.12)."""
+
+    def test_filters_by_learned_pattern(self):
+        """Should filter lessons by learned pattern when file_path provided."""
+        state = {
+            "memory": [
+                {
+                    "trigger": "python",
+                    "lesson": "Use pathlib for paths",
+                    "reinforced": 3,
+                    "learned_patterns": {
+                        "inferred_pattern": "**/*.py",
+                        "coverage": 0.9
+                    }
+                }
+            ]
+        }
+
+        # Should match for .py files
+        result = memory_utils.surface_relevant_memory(
+            state, "editing python file",
+            file_path="/src/utils.py"
+        )
+        self.assertEqual(len(result), 1)
+
+        # Should NOT match for .js files
+        result = memory_utils.surface_relevant_memory(
+            state, "editing python file",
+            file_path="/src/config.js"
+        )
+        self.assertEqual(len(result), 0)
+
+    def test_works_without_file_path(self):
+        """Should work without file_path (backward compatible)."""
+        state = {
+            "memory": [
+                {
+                    "trigger": "test",
+                    "lesson": "Test lesson",
+                    "reinforced": 1,
+                    "learned_patterns": {
+                        "inferred_pattern": "**/*.py",
+                        "coverage": 0.9
+                    }
+                }
+            ]
+        }
+
+        # Without file_path, should still match based on trigger
+        result = memory_utils.surface_relevant_memory(state, "test context")
+        self.assertEqual(len(result), 1)
+
+
+class TestLearnLessonPatterns(unittest.TestCase):
+    """Tests for learn_lesson_patterns function."""
+
+    @patch.object(memory_utils, 'get_memory_items')
+    @patch.object(memory_utils, 'get_lesson_applications')
+    def test_returns_empty_for_no_applications(self, mock_apps, mock_memory):
+        """Should return empty dict when no applications found."""
+        mock_memory.return_value = [
+            {"trigger": "test", "lesson": "Test"}
+        ]
+        mock_apps.return_value = []
+
+        result = memory_utils.learn_lesson_patterns({})
+        self.assertEqual(result, {})
+
+    @patch.object(memory_utils, 'get_memory_items')
+    @patch.object(memory_utils, 'get_lesson_applications')
+    @patch.object(memory_utils, 'infer_file_pattern')
+    def test_learns_patterns_from_applications(self, mock_infer, mock_apps, mock_memory):
+        """Should learn patterns from sufficient applications."""
+        mock_memory.return_value = [
+            {"trigger": "python", "lesson": "Use pathlib"}
+        ]
+        mock_apps.return_value = [
+            {"file_path": "/a/x.py", "timestamp": "2024-01-01"},
+            {"file_path": "/b/y.py", "timestamp": "2024-01-02"},
+            {"file_path": "/c/z.py", "timestamp": "2024-01-03"},
+        ]
+        mock_infer.return_value = "**/*.py"
+
+        result = memory_utils.learn_lesson_patterns({})
+
+        self.assertIn("python", result)
+        self.assertEqual(result["python"]["inferred_pattern"], "**/*.py")
+        self.assertEqual(result["python"]["applications"], 3)
+
+
 if __name__ == "__main__":
     unittest.main()

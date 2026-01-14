@@ -1,6 +1,6 @@
-# /edge and /edge-loop Canonical Contract (vNext)
+# /edge and /edge-loop Canonical Contract (v4.0)
 
-Status: proposed contract; current implementation may differ (see "Current Deviations").
+Status: v4.0 Phase 1 implemented; mode awareness added to /edge command.
 
 ## Scope
 
@@ -22,6 +22,7 @@ explicitly referenced for junction gating.
 
 ### active_context.yaml (source of truth)
 - Required fields: objective, plan, current_step, constraints, risks
+- Optional field: mode (plan|active|review|done) - if not set, auto-detected from state
 - This file is the only source for "what should happen" (intent and plan).
 
 ### .claude/state/gear_state.json (gear runtime state)
@@ -95,6 +96,42 @@ All gears are reachable; detection implies reachability:
 
 No detected gear may be unreachable from current_gear.
 
+## Mode System (v4.0)
+
+Modes represent workflow phases and influence /edge behavior.
+
+### Mode Values
+| Mode | Purpose | When Detected |
+|------|---------|---------------|
+| PLAN | Explore codebase, create plan | No objective set |
+| ACTIVE | Execute plan steps | Has objective + incomplete steps |
+| REVIEW | Verify completion | Has objective + all steps complete |
+| DONE | Archive and clear | Explicit only (user sets) |
+
+### Mode Detection
+If `mode` field is set in active_context.yaml, use it directly.
+Otherwise, auto-detect from state:
+1. No objective → PLAN
+2. Has objective, no plan → ACTIVE
+3. Has objective, has pending/in_progress steps → ACTIVE
+4. Has objective, all steps completed → REVIEW
+
+### Mode Commands
+- `/edge plan` - Set mode to PLAN
+- `/edge active` - Set mode to ACTIVE
+- `/edge review` - Set mode to REVIEW
+- `/edge done` - Set mode to DONE
+
+Mode persists to active_context.yaml and affects /edge output and guidance.
+
+### Mode Behaviors (Phase 2)
+| Mode | /edge Behavior |
+|------|----------------|
+| PLAN | Shows objective/plan status, suggests next steps, NO gear engine |
+| ACTIVE | Runs gear engine (ACTIVE/PATROL/DREAM), shows transitions/junctions |
+| REVIEW | Shows verification checklist, plan completion status, command hints |
+| DONE | Shows archive options, prune/score commands, new objective guidance |
+
 ## Structured Result Contract
 
 Each gear returns a structured result (no string parsing):
@@ -114,12 +151,13 @@ CLI output is presentation only.
 ## /edge Command Semantics
 
 ### Command Routing
-- /edge status: show gear + junction state (no execution)
+- /edge status: show gear + junction state + mode (no execution)
 - /edge stop/off: disable dispatch/automation and reset gear_state
-- /edge approve: resolve pending junction then continue run
+- /edge approve: resolve pending junction (one-time allowance) then continue run
 - /edge skip: reject current candidate and continue run
-- /edge dismiss: clear junction and suppress it temporarily
-- /edge (no args or on): execute one engine cycle
+- /edge dismiss [TTL]: clear junction and suppress matching junctions for TTL minutes (default: 60)
+- /edge plan|active|review|done: set mode and show guidance (v4.0)
+- /edge (no args or on): execute one engine cycle with mode-aware output
 
 ### Junction Gate (first-class, early)
 If a pending junction exists and the command is not approve/skip/dismiss:
@@ -156,9 +194,37 @@ Error policy:
 - All writes are atomic (write temp -> rename).
 - Reports use unique filenames (date + time suffix on collision).
 
-## Current Deviations (as of v3.9)
+## Current Deviations (as of v4.0)
 
 The following differences exist between code and this contract:
 - /edge run ignores free-form args.
 
-These deviations must be closed before this contract is fully enforced.
+### v4.0 Phase 1 Completed
+- Mode field added to active_context.yaml
+- detect_mode() auto-detects mode from state
+- /edge plan|active|review|done subcommands implemented
+- /edge output shows mode + gear in header
+- Deprecation warnings added to legacy commands
+
+### v4.0 Phase 2 Completed
+- Mode-specific handlers: handle_plan_mode(), handle_review_mode(), handle_done_mode(), handle_active_mode()
+- PLAN mode: Exploration output, no gear engine - shows objective/plan status, next steps
+- REVIEW mode: Verification checklist, plan completion status, command hints
+- DONE mode: Archive options, prune/score commands, new objective guidance
+- ACTIVE mode: Runs gear engine (unchanged behavior)
+
+### v4.0 Phase 3 Completed
+- suggest_mode_transition() detects when transition is appropriate
+- PLAN mode suggests ACTIVE when plan has pending steps
+- ACTIVE mode suggests REVIEW when all steps completed
+- mode_transition junction type gates transitions (user must approve)
+- handle_approve() performs set_mode() on mode_transition junction approval
+
+### Mode Transition Graph
+```
+PLAN ──(plan ready)──> ACTIVE ──(all complete)──> REVIEW ──(user)──> DONE
+  ^                                                                    │
+  └────────────────────────(new objective)─────────────────────────────┘
+```
+
+All transitions require user approval via `/edge approve`.

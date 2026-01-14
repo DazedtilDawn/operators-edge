@@ -3,6 +3,8 @@ description: Run a self-review of uncommitted changes
 allowed-tools: Read, Bash, Glob, Grep
 ---
 
+> **[v4.0 NOTE]** This command focuses on code diff review. For workflow completion verification, use `/edge review` mode.
+
 # Code Review
 
 Run a structured self-review of your current changes before committing.

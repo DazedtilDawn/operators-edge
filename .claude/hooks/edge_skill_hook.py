@@ -29,7 +29,7 @@ from gear_config import (
     format_gear_status,
     GEAR_EMOJI,
 )
-from state_utils import load_yaml_state
+from state_utils import load_yaml_state, Mode, detect_mode, set_mode, suggest_mode_transition
 from junction_utils import (
     get_pending_junction,
     set_pending_junction,
@@ -73,6 +73,9 @@ def parse_edge_args(user_input: str) -> dict:
         return {"command": first_word, "args": rest}
     elif first_word.startswith("dismiss"):
         return {"command": "dismiss", "args": rest}
+    # Mode commands (v4.0)
+    elif first_word in ("plan", "active", "review", "done"):
+        return {"command": "mode", "args": first_word}
     else:
         # Treat as run with extra context
         return {"command": "run", "args": after_edge}
@@ -119,7 +122,7 @@ def handle_stop() -> str:
     gear_state = load_gear_state()
 
     # Reset to default state
-    reset_gear_state()
+    _, reset_error = reset_gear_state()
 
     lines = [
         "=" * 70,
@@ -131,19 +134,48 @@ def handle_stop() -> str:
         f"  Dream proposals made: {gear_state.dream_proposals_count}",
         f"  Iterations: {gear_state.iterations}",
         "",
+    ]
+
+    if reset_error:
+        lines.append(f"[WARNING] Reset not persisted: {reset_error}")
+        lines.append("")
+
+    lines.extend([
         "Gear state reset. Run /edge to restart.",
         "=" * 70,
-    ]
+    ])
     return "\n".join(lines)
 
 
 def handle_approve() -> tuple[str, bool]:
     """Handle /edge approve - clear junction and continue."""
+    # Check if this is a mode_transition junction
+    pending_junction = get_pending_junction()
+    is_mode_transition = (
+        pending_junction and
+        pending_junction.get("type") == "mode_transition"
+    )
+
     try:
-        pending = clear_pending_junction("approve")
+        pending, warning = clear_pending_junction("approve")
     except TimeoutError as exc:
         return (f"[ERROR] State lock busy while clearing junction. {exc}", False)
+    if warning:
+        return (f"[WARNING] {warning}", False)
+
     if pending:
+        # If it was a mode_transition, perform the mode switch
+        if is_mode_transition:
+            payload = pending_junction.get("payload", {})
+            to_mode_str = payload.get("to", "")
+            try:
+                to_mode = Mode(to_mode_str)
+                set_mode(to_mode)
+                from_mode = payload.get("from", "unknown")
+                to_emoji = MODE_EMOJI.get(to_mode, "?")
+                return (f"[MODE SWITCH] {from_mode.upper()} -> {to_emoji} {to_mode.value.upper()}", True)
+            except ValueError:
+                return ("[APPROVED] Junction cleared (invalid mode). Continuing...", True)
         return ("[APPROVED] Junction cleared. Continuing execution...", True)
     return ("[APPROVE] No pending junction found. Running gear cycle...", True)
 
@@ -153,65 +185,343 @@ def handle_skip() -> tuple[str, bool]:
     pending = get_pending_junction()
     junction_type = pending.get("type", "unknown") if pending else "unknown"
     try:
-        cleared = clear_pending_junction("skip")
+        cleared, warning = clear_pending_junction("skip")
     except TimeoutError as exc:
         return (f"[ERROR] State lock busy while skipping junction. {exc}", False)
+    if warning:
+        return (f"[WARNING] {warning}", False)
     if cleared:
         return (f"[SKIPPED] {junction_type} junction skipped. Trying next action...", True)
     return ("[SKIP] Nothing to skip. Running gear cycle...", True)
 
 
-def handle_dismiss() -> tuple[str, bool]:
-    """Handle /edge dismiss - dismiss current junction temporarily."""
+def handle_dismiss(args: str = "") -> tuple[str, bool]:
+    """Handle /edge dismiss [minutes] - dismiss current junction temporarily.
+
+    Args:
+        args: Optional TTL in minutes (default: 60)
+    """
     pending = get_pending_junction()
     junction_type = pending.get("type", "unknown") if pending else "unknown"
+
+    # Parse TTL from args
+    ttl_minutes = None
+    if args.strip():
+        try:
+            ttl_minutes = int(args.strip())
+            if ttl_minutes <= 0:
+                return ("[ERROR] TTL must be a positive number of minutes.", False)
+        except ValueError:
+            return (f"[ERROR] Invalid TTL '{args.strip()}'. Use /edge dismiss <minutes>", False)
+
     try:
-        cleared = clear_pending_junction("dismiss")
+        cleared, warning = clear_pending_junction("dismiss", suppress_minutes=ttl_minutes)
     except TimeoutError as exc:
         return (f"[ERROR] State lock busy while dismissing junction. {exc}", False)
+    if warning:
+        return (f"[WARNING] {warning}", False)
     if cleared:
-        return (f"[DISMISSED] {junction_type} junction dismissed. Continuing...", True)
+        ttl_display = ttl_minutes if ttl_minutes else 60
+        return (f"[DISMISSED] {junction_type} junction dismissed for {ttl_display} minutes. Continuing...", True)
     return ("[DISMISS] Nothing to dismiss. Running gear cycle...", True)
 
 
-def handle_run(args: str = "") -> str:
-    """Handle /edge (run) - execute gear cycle."""
-    pending = get_pending_junction()
-    if pending:
-        reason = (pending.get("payload") or {}).get("reason", "No reason provided")
-        lines = [
-            "=" * 70,
-            "OPERATOR'S EDGE v3.9 - JUNCTION PENDING",
-            "=" * 70,
-            "",
-            f"JUNCTION: {pending.get('type')}",
-            "",
-            f"Reason: {reason}",
-            "",
-            "Options:",
-            "  /edge approve  - Continue with proposed action",
-            "  /edge skip     - Skip this, try next",
-            "  /edge dismiss  - Dismiss this junction",
-            "  /edge stop     - Stop autonomous mode",
-            "",
-            "=" * 70,
-        ]
-        return "\n".join(lines)
+# Mode emoji mapping
+MODE_EMOJI = {
+    Mode.PLAN: "\U0001F4DD",      # Memo
+    Mode.ACTIVE: "\U0001F3AF",    # Target
+    Mode.REVIEW: "\U0001F50D",    # Magnifying glass
+    Mode.DONE: "\u2705",          # Check mark
+}
 
-    state = load_yaml_state() or {}
+
+def handle_mode(mode_name: str) -> str:
+    """
+    Handle /edge plan|active|review|done - set explicit mode.
+
+    Args:
+        mode_name: The mode to set (plan, active, review, done)
+
+    Returns:
+        Status message
+    """
+    try:
+        new_mode = Mode(mode_name.lower())
+    except ValueError:
+        return f"[ERROR] Unknown mode: {mode_name}. Use plan|active|review|done"
+
+    # Get current mode before changing
+    current_mode = detect_mode()
+
+    # Set the new mode (auto-saves to file)
+    set_mode(new_mode)
+
+    emoji = MODE_EMOJI.get(new_mode, "?")
+    old_emoji = MODE_EMOJI.get(current_mode, "?")
+
+    lines = [
+        "=" * 70,
+        f"OPERATOR'S EDGE v4.0 - MODE SET",
+        "=" * 70,
+        "",
+        f"Mode: {old_emoji} {current_mode.value.upper()} -> {emoji} {new_mode.value.upper()}",
+        "",
+    ]
+
+    # Add mode-specific guidance
+    if new_mode == Mode.PLAN:
+        lines.extend([
+            "You are now in PLAN mode.",
+            "  - Explore the codebase and understand requirements",
+            "  - Create or refine your plan in active_context.yaml",
+            "  - Run /edge to get planning assistance",
+        ])
+    elif new_mode == Mode.ACTIVE:
+        lines.extend([
+            "You are now in ACTIVE mode.",
+            "  - Execute plan steps one at a time",
+            "  - Mark steps as completed with proof",
+            "  - Run /edge to execute the current step",
+        ])
+    elif new_mode == Mode.REVIEW:
+        lines.extend([
+            "You are now in REVIEW mode.",
+            "  - Verify all work is complete",
+            "  - Run tests and quality checks",
+            "  - Run /edge to verify completion",
+        ])
+    elif new_mode == Mode.DONE:
+        lines.extend([
+            "You are now in DONE mode.",
+            "  - Archive completed work",
+            "  - Clear state for next objective",
+            "  - Run /edge to finalize",
+        ])
+
+    lines.extend(["", "=" * 70])
+    return "\n".join(lines)
+
+
+def _format_junction_pending(pending: dict) -> str:
+    """Format pending junction output."""
+    reason = (pending.get("payload") or {}).get("reason", "No reason provided")
+    lines = [
+        "=" * 70,
+        "OPERATOR'S EDGE v4.0 - JUNCTION PENDING",
+        "=" * 70,
+        "",
+        f"JUNCTION: {pending.get('type')}",
+        "",
+        f"Reason: {reason}",
+        "",
+        "Options:",
+        "  /edge approve      - Continue with proposed action (one-time)",
+        "  /edge skip         - Skip this, try next approach",
+        "  /edge dismiss      - Dismiss for 60 minutes (auto-approve matching)",
+        "  /edge dismiss 120  - Dismiss for custom TTL (minutes)",
+        "  /edge stop         - Stop autonomous mode",
+        "",
+        "=" * 70,
+    ]
+    return "\n".join(lines)
+
+
+def handle_plan_mode(state: dict) -> str:
+    """Handle /edge in PLAN mode - exploration, no gear engine."""
+    mode_emoji = MODE_EMOJI.get(Mode.PLAN, "?")
+    objective = state.get("objective", "")
+    plan = state.get("plan", [])
+
+    lines = [
+        "=" * 70,
+        f"OPERATOR'S EDGE v4.0 - {mode_emoji} PLAN mode",
+        "=" * 70,
+        "",
+        "[PLAN MODE] Explore the codebase and create your plan",
+        "",
+    ]
+
+    if objective:
+        lines.extend([
+            f"Current objective: {objective[:60]}...",
+            "",
+        ])
+
+    # Check for suggested transition
+    transition = suggest_mode_transition(state)
+
+    if plan:
+        pending = sum(1 for s in plan if isinstance(s, dict) and s.get("status") == "pending")
+        completed = sum(1 for s in plan if isinstance(s, dict) and s.get("status") == "completed")
+        lines.extend([
+            f"Plan exists: {len(plan)} steps ({completed} completed, {pending} pending)",
+            "",
+        ])
+
+        if transition:
+            _, to_mode, reason = transition
+            to_emoji = MODE_EMOJI.get(to_mode, "?")
+            lines.extend([
+                "-" * 70,
+                f"TRANSITION AVAILABLE: {mode_emoji} PLAN -> {to_emoji} {to_mode.value.upper()}",
+                f"Reason: {reason}",
+                "",
+                "Run /edge approve to switch, or /edge skip to stay in PLAN mode",
+                "",
+            ])
+            # Set junction for transition
+            try:
+                set_pending_junction(
+                    "mode_transition",
+                    {"from": "plan", "to": to_mode.value, "reason": reason},
+                    source="edge"
+                )
+            except TimeoutError:
+                pass  # Non-fatal - junction just won't be set
+        else:
+            lines.extend([
+                "Ready to execute? Run: /edge active",
+                "",
+            ])
+    else:
+        lines.extend([
+            "No plan yet. Suggested next steps:",
+            "  1. Explore the codebase to understand the problem",
+            "  2. Identify key files and patterns",
+            "  3. Create a plan in active_context.yaml",
+            "  4. Run /edge active to start executing",
+            "",
+        ])
+
+    lines.extend([
+        "-" * 70,
+        "Commands:",
+        "  /edge active  - Switch to ACTIVE mode and start executing",
+        "  /edge-plan    - Get help creating a plan",
+        "=" * 70,
+    ])
+    return "\n".join(lines)
+
+
+def handle_review_mode(state: dict) -> str:
+    """Handle /edge in REVIEW mode - verification checks."""
+    mode_emoji = MODE_EMOJI.get(Mode.REVIEW, "?")
+    objective = state.get("objective", "")
+    plan = state.get("plan", [])
+
+    lines = [
+        "=" * 70,
+        f"OPERATOR'S EDGE v4.0 - {mode_emoji} REVIEW mode",
+        "=" * 70,
+        "",
+        "[REVIEW MODE] Verify all work is complete",
+        "",
+    ]
+
+    if objective:
+        lines.append(f"Objective: {objective[:60]}...")
+        lines.append("")
+
+    # Check plan status
+    if plan:
+        completed = sum(1 for s in plan if isinstance(s, dict) and s.get("status") == "completed")
+        pending = sum(1 for s in plan if isinstance(s, dict) and s.get("status") == "pending")
+        in_progress = sum(1 for s in plan if isinstance(s, dict) and s.get("status") == "in_progress")
+
+        lines.extend([
+            f"Plan: {len(plan)} steps",
+            f"  Completed: {completed}",
+            f"  In Progress: {in_progress}",
+            f"  Pending: {pending}",
+            "",
+        ])
+
+        if pending > 0 or in_progress > 0:
+            lines.extend([
+                "WARNING: Not all steps complete!",
+                "  Run /edge active to continue working",
+                "",
+            ])
+        else:
+            lines.extend([
+                "All steps marked complete.",
+                "",
+            ])
+
+    lines.extend([
+        "-" * 70,
+        "Verification checklist:",
+        "  [ ] All plan steps have proof",
+        "  [ ] Tests pass (if applicable)",
+        "  [ ] No unresolved mismatches",
+        "  [ ] Code compiles/runs correctly",
+        "",
+        "Commands:",
+        "  /edge-verify  - Run automated checks",
+        "  /edge-review  - Self-review code changes",
+        "  /edge done    - Mark as complete and archive",
+        "=" * 70,
+    ])
+    return "\n".join(lines)
+
+
+def handle_done_mode(state: dict) -> str:
+    """Handle /edge in DONE mode - archiving workflow."""
+    mode_emoji = MODE_EMOJI.get(Mode.DONE, "?")
+    objective = state.get("objective", "")
+    plan = state.get("plan", [])
+
+    lines = [
+        "=" * 70,
+        f"OPERATOR'S EDGE v4.0 - {mode_emoji} DONE mode",
+        "=" * 70,
+        "",
+        "[DONE MODE] Archive and prepare for next objective",
+        "",
+    ]
+
+    if objective:
+        lines.append(f"Completed: {objective[:60]}...")
+        lines.append("")
+
+    if plan:
+        completed = sum(1 for s in plan if isinstance(s, dict) and s.get("status") == "completed")
+        lines.append(f"Steps completed: {completed}/{len(plan)}")
+        lines.append("")
+
+    lines.extend([
+        "-" * 70,
+        "Archive options:",
+        "  /edge-prune   - Archive completed work, reduce state entropy",
+        "  /edge-score   - Self-assess against 6-check rubric",
+        "",
+        "To start a new objective:",
+        "  1. Update active_context.yaml with new objective",
+        "  2. Run /edge plan to enter planning mode",
+        "",
+        "=" * 70,
+    ])
+    return "\n".join(lines)
+
+
+def handle_active_mode(state: dict) -> str:
+    """Handle /edge in ACTIVE mode - run gear engine."""
     project_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", "."))
 
     # Run the gear engine
     result = run_gear_engine(state, project_dir)
 
     # Build output
+    mode_emoji = MODE_EMOJI.get(Mode.ACTIVE, "?")
     gear_emoji = GEAR_EMOJI.get(result.gear_executed, "?")
     gear_name = result.gear_executed.value.upper()
 
     lines = [
         "=" * 70,
-        f"OPERATOR'S EDGE v3.9 - [{gear_name}] Gear",
+        f"OPERATOR'S EDGE v4.0 - {mode_emoji} ACTIVE mode | {gear_emoji} {gear_name} gear",
         "=" * 70,
+        "",
+        "[ACTIVE MODE] Execute plan steps - mark completed with proof",
         "",
     ]
 
@@ -240,18 +550,25 @@ def handle_run(args: str = "") -> str:
             f"Reason: {result.junction_reason}",
             "",
             "Options:",
-            "  /edge approve  - Continue with proposed action",
-            "  /edge skip     - Skip this, try next",
-            "  /edge stop     - Stop autonomous mode",
+            "  /edge approve      - Continue with proposed action (one-time)",
+            "  /edge skip         - Skip this, try next approach",
+            "  /edge dismiss      - Dismiss for 60 minutes (auto-approve matching)",
+            "  /edge dismiss 120  - Dismiss for custom TTL (minutes)",
+            "  /edge stop         - Stop autonomous mode",
         ])
 
         # Save junction state for approve/skip handling
         try:
-            set_pending_junction(
+            _, warning = set_pending_junction(
                 result.junction_type,
                 {"reason": result.junction_reason, "gear": gear_name.lower()},
                 source="edge"
             )
+            if warning:
+                lines.extend([
+                    "",
+                    f"[WARNING] {warning}",
+                ])
         except TimeoutError as exc:
             lines.extend([
                 "",
@@ -260,6 +577,33 @@ def handle_run(args: str = "") -> str:
                 "=" * 70,
             ])
             return "\n".join(lines)
+
+    # Check for mode transition (ACTIVE → REVIEW when all steps complete)
+    if not result.junction_hit:
+        # Reload state to get latest (gear engine may have updated it)
+        fresh_state = load_yaml_state() or {}
+        transition = suggest_mode_transition(fresh_state)
+        if transition:
+            _, to_mode, reason = transition
+            to_emoji = MODE_EMOJI.get(to_mode, "?")
+            lines.extend([
+                "",
+                "-" * 70,
+                f"TRANSITION AVAILABLE: {mode_emoji} ACTIVE -> {to_emoji} {to_mode.value.upper()}",
+                f"Reason: {reason}",
+                "",
+                "Run /edge approve to switch to REVIEW mode, or /edge skip to continue",
+                "",
+            ])
+            # Set junction for transition
+            try:
+                set_pending_junction(
+                    "mode_transition",
+                    {"from": "active", "to": to_mode.value, "reason": reason},
+                    source="edge"
+                )
+            except TimeoutError:
+                pass  # Non-fatal
 
     # Add continuation hint
     if result.continue_loop and not result.junction_hit:
@@ -270,6 +614,29 @@ def handle_run(args: str = "") -> str:
 
     lines.extend(["", "=" * 70])
     return "\n".join(lines)
+
+
+def handle_run(args: str = "") -> str:
+    """Handle /edge (run) - dispatch to mode-specific handler."""
+    # Check for pending junction first (applies to all modes)
+    pending = get_pending_junction()
+    if pending:
+        return _format_junction_pending(pending)
+
+    # Load state and detect mode
+    state = load_yaml_state() or {}
+    current_mode = detect_mode(state)
+
+    # Dispatch to mode-specific handler
+    if current_mode == Mode.PLAN:
+        return handle_plan_mode(state)
+    elif current_mode == Mode.REVIEW:
+        return handle_review_mode(state)
+    elif current_mode == Mode.DONE:
+        return handle_done_mode(state)
+    else:
+        # ACTIVE mode (default) - runs gear engine
+        return handle_active_mode(state)
 
 
 def main():
@@ -310,10 +677,13 @@ def main():
         if should_run:
             print(handle_run())
     elif command == "dismiss":
-        message, should_run = handle_dismiss()
+        message, should_run = handle_dismiss(args)
         print(message)
         if should_run:
             print(handle_run())
+    elif command == "mode":
+        # /edge plan|active|review|done
+        print(handle_mode(args))
     else:
         # Default: run gear cycle
         print(handle_run(args))

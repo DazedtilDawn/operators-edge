@@ -23,14 +23,15 @@ class TestGearStatePersistence(unittest.TestCase):
         self.assertEqual(state.current_gear, Gear.ACTIVE)
 
     def test_reset_gear_state(self):
-        """reset_gear_state should return default state."""
+        """reset_gear_state should return default state and error tuple."""
         from gear_engine import reset_gear_state
         from gear_config import Gear
 
-        with patch('gear_engine.save_gear_state'):
-            state = reset_gear_state()
+        with patch('gear_engine.save_gear_state', return_value=(True, None)):
+            state, error = reset_gear_state()
             self.assertEqual(state.current_gear, Gear.ACTIVE)
             self.assertEqual(state.iterations, 0)
+            self.assertIsNone(error)
 
 
 class TestExecuteTransition(unittest.TestCase):
@@ -165,6 +166,7 @@ class TestRunGearEngine(unittest.TestCase):
         from gear_config import Gear, get_default_gear_state
 
         mock_load.return_value = get_default_gear_state()
+        mock_save.return_value = (True, None)  # Success tuple
         mock_run.return_value = GearEngineResult(
             gear_executed=Gear.ACTIVE,
             transitioned=False,
@@ -195,6 +197,7 @@ class TestRunGearEngine(unittest.TestCase):
         from gear_engine import run_gear_engine, GearEngineResult
         from gear_config import Gear, GearState
 
+        mock_save.return_value = (True, None)  # Success tuple
         mock_load.return_value = GearState(
             current_gear=Gear.PATROL,
             entered_at="2025-01-01",

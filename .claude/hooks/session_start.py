@@ -37,6 +37,8 @@ from edge_utils import (
     generate_reflection_summary,
     get_default_yolo_state
 )
+from proof_utils import initialize_proof_session, archive_old_sessions
+from archive_utils import cleanup_archive
 
 def generate_session_id():
     """Generate a unique session ID."""
@@ -96,8 +98,10 @@ def _output_memory(memory):
                 trigger = m.get('trigger', '*')
                 lesson = m.get('lesson', str(m))
                 reinforced = m.get('reinforced', 0)
+                evergreen = m.get('evergreen', False)
                 strength = "+" * min(reinforced, 3) if reinforced > 0 else ""
-                print(f"  - {strength} When [{trigger}]: {lesson}")
+                prefix = "*" if evergreen else strength  # * = evergreen (never decays)
+                print(f"  - {prefix} When [{trigger}]: {lesson}")
             else:
                 print(f"  - {m}")
 
@@ -224,9 +228,28 @@ def main():
     proof_dir = get_proof_dir()
     proof_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save session ID
+    # Generate and save session ID
     session_id = generate_session_id()
     (state_dir / "session_id").write_text(session_id)
+
+    # Initialize proof session (session-scoped logs with symlink)
+    initialize_proof_session(session_id)
+
+    # Archive old session logs (retention policy: 7 days)
+    try:
+        archived = archive_old_sessions()
+        if archived > 0:
+            print(f"[Proof] Archived {archived} old session log(s)")
+    except Exception:
+        pass  # Best effort cleanup
+
+    # v3.10: Archive retention cleanup (type-based retention)
+    try:
+        removed, kept = cleanup_archive()
+        if removed > 0:
+            print(f"[Archive] Cleaned {removed} expired entries ({kept} remaining)")
+    except Exception:
+        pass  # Best effort cleanup
 
     # Capture starting hash of state file
     start_hash = save_state_hash()

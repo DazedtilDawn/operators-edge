@@ -3,6 +3,9 @@ description: Create or update the plan in active_context.yaml
 allowed-tools: Read, Write, Glob, Grep
 ---
 
+> **[v4.0 MIGRATION]** Consider using `/edge plan` to enter PLAN mode instead.
+> The `/edge-plan` command still works but `/edge plan` provides better mode awareness.
+
 # Create/Update Plan
 
 Read the current state and help create or refine a plan.

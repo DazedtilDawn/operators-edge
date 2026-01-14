@@ -3,87 +3,60 @@
 
 # Current session (updated by session_start hook)
 session:
-  id: "20251230-discovery-mode"
-  started_at: "2025-12-30T00:00:00"
-  note: "v3.9.5 Live Server Mode - bookmark localhost:8080"
+  id: "20260113-v4-complete"
+  started_at: "2026-01-13T09:00:00"
+  note: "Protocol v4.0 complete - mode awareness, behavior, transitions"
 
   state_hash_start: "68c413a8a31df2033deba53cb708e7f85b819196cc5643eb3a7445f16712e1dd"
+mode: "active"
+
 # What are we trying to achieve?
-objective: "Make /edge and /edge-loop self-consistent, deterministic, and race-safe with a single canonical contract (junctions, gears, persistence), and sync Claude Code skill versions"
+objective: "Phase 2: State Consolidation - Single Canonical State"
 
 # Current position in the plan
-current_step: 11
+current_step: 8
 
 # The plan - each step must have description, status, and proof
 # Status: pending | in_progress | completed | blocked
 plan:
-  - description: "Define canonical contract for /edge (junction schema + gear state invariants + result structure) and align docs with code"
-    status: completed
-    proof: "Added docs/edge-command-contract.md with canonical /edge + /edge-loop contract, schemas, invariants, error semantics, and deviation list; referenced in CLAUDE.md."
-    expected: "Single junction schema and result contract documented; clear invariants for gear transitions and persistence"
-    verification: "Updated docs/specs reflect the canonical schema and invariants"
-    actual: "Created contract doc and linked it in CLAUDE.md; documented schemas, invariants, and current deviations."
-    delta: null
-  - description: "Implement deterministic engine behavior (complete transition graph, structured results, persist gear_state every run)"
-    status: completed
-    proof: "Added ACTIVE→DREAM transition, persisted gear_state every run with last_run_at, and removed string-parsing control flow for approve/skip; updated tests for new transition and handler return types."
-    expected: "All gears reachable; run loop uses structured fields instead of output parsing; gear_state updated on every run"
-    verification: "Unit tests or manual checks confirm transitions and persisted iterations"
-    actual: "Implemented ACTIVE→DREAM in gear_config/gear_engine, added last_run_at persistence per run, and refactored approve/skip to return (message, should_run); updated related tests."
-    delta: null
-  - description: "Unify junction handling (approve/skip/dismiss semantics, pending gate, selection flows) with single schema"
-    status: completed
-    proof: "Added junction_utils with junction_state.json schema, migrated edge_skill_hook to pending gate + approve/skip/dismiss via new schema, and integrated dispatch_utils with junction_state; updated tests."
-    expected: "Junctions are first-class, gate execution deterministically, and are cleared/updated consistently"
-    verification: "Approve/skip/dismiss behavior matches spec and no string matching is used"
-    actual: "Implemented junction_state.json with history/suppression, pending gate in handle_run, and approve/skip/dismiss semantics; tests updated."
-    delta: null
-  - description: "Normalize error semantics and limits (patrol/dream failures, quality gate epoch, enforce/remove limits)"
-    status: completed
-    proof: "Active/PATROL/DREAM now block transitions on errors; patrol scan timeout enforced; completion_epoch gates quality checks; pytest run for patrol/dream tests."
-    expected: "Errors are not silently treated as success; limits either enforced or removed"
-    verification: "Patrol/Dream error paths and quality gate behavior match spec"
-    actual: "Added completion_epoch gating in gear_engine, enforced patrol scan timeout, and prevented patrol/dream transitions on error; updated patrol/dream tests; pytest run for patrol/dream tests."
-    delta: null
-  - description: "Add race safety (locking + atomic writes) and edge-loop reliability (EDGE_PORT, verify server start, graceful failures)"
-    status: completed
-    proof: "Added file locks + atomic writes for state files; edge_loop.sh now respects EDGE_PORT, verifies server start, and handles failures gracefully; tests run for state_utils/dispatch_utils/clickup_utils."
-    expected: "State writes are atomic and serialized; edge_loop uses correct port and verifies server start"
-    verification: "Concurrent runs do not corrupt state; edge_loop honors EDGE_PORT"
-    actual: "Implemented lock/atomic helpers in state_utils; applied to gear_state, junction_state, dispatch_state, clickup_task, and active_context mismatch writes; updated edge_loop.sh with EDGE_PORT, server verification, and non-fatal error handling; pytest run for related modules."
-    delta: null
-  - description: "Update tests/docs/commands to match the new contract and remove deprecated behaviors"
-    status: completed
-    proof: "Updated /edge and /edge-loop command docs, contract deviations, and CLAUDE.md to align with junction/gear behavior and EDGE_PORT; synced dist command docs."
-    expected: "Docs and command outputs align with implementation; tests cover new schema and transitions"
-    verification: "Tests or documented verification steps confirm behavior"
-    actual: "Aligned /edge docs to v3.9 gear detection/transition behavior, updated junction/argument semantics, refreshed edge_loop docs, fixed contract deviations, and synced dist command docs."
-    delta: "Documentation-only updates; no additional automated tests run for docs."
-  - description: "Audit Claude Code skill/command versions for drift against updated contract/docs"
-    status: completed
-    proof: "Audit captured in active_context.yaml (targets and drift notes)."
-    expected: "All Claude Code skill/command files that mirror /edge or /edge-loop are identified for sync"
-    verification: "List of target files and delta notes recorded"
-    actual: "Audited Claude Code targets: .claude/skills/operators-edge/SKILL.md (gear definitions/outdated; missing junction_state/gear_state + quality gate references), .claude/commands/edge-yolo.md (no junction_state source-of-truth mention), dist/operators-edge/.claude/commands/edge-yolo.md (same). Confirmed .claude/commands/edge.md and edge-loop.md already updated and copied to dist."
-    delta: null
-  - description: "Apply contract-aligned updates to Claude Code skill/command files and any packaged copies"
-    status: completed
-    proof: "Updated operators-edge skill and edge-yolo command docs; synced dist edge-yolo.md."
-    expected: "Claude Code versions reflect junction_state/gear_state usage, EDGE_PORT, and current transitions"
-    verification: "Diffs show parity with canonical docs; spot-check outputs"
-    actual: "Updated .claude/skills/operators-edge/SKILL.md with v3.9 gear semantics, error handling, rate limit, and state file references; added junction_state source note to edge-yolo docs and synced dist copy."
-    delta: null
-  - description: "Finalize session state and run $edge-done."
-    status: completed
-    proof: "Session validation run and final state/proof recorded."
-  - description: "Fix /edge status crash and add lock-timeout handling with tests"
-    status: completed
-    proof: "Resolved status shadowing crash, added lock timeout handling for junction actions, added tests, and synced dist hooks."
-    expected: "Status is total/read-only; lock timeouts surface cleanly; tests cover new cases"
-    verification: "pytest .claude/hooks/test_edge_skill_hook.py"
-    actual: "Renamed junction vs step counters, added timeout handling for approve/skip/dismiss and junction persistence, added tests for status+timeouts, and copied updated hooks to dist; pytest passed."
-    delta: null
+  - description: "Design consolidated schema - add runtime section to active_context.yaml"
+    status: "completed"
+    proof: "Added runtime section with junction/gear/dispatch subsections, helper functions get_runtime_section/update_runtime_section"
+  - description: "Migrate junction_utils.py to read/write from YAML runtime.junction"
+    status: "completed"
+    proof: "USE_YAML_RUNTIME flag, _load_from_yaml_runtime, _save_to_yaml_runtime with JSON fallback"
+  - description: "Migrate gear_engine.py to read/write from YAML runtime.gear"
+    status: "completed"
+    proof: "load_gear_state/save_gear_state now read/write YAML first with JSON fallback"
+  - description: "Migrate dispatch_utils.py to read/write from YAML runtime.dispatch"
+    status: "completed"
+    proof: "load_dispatch_state/save_dispatch_state now read/write YAML first with JSON fallback"
+  - description: "Update all consumers (hooks, skills) to use YAML paths"
+    status: "completed"
+    proof: "Consumers use same API - no changes needed, verified via integration test"
+  - description: "Add migration logic for existing JSON state files"
+    status: "completed"
+    proof: "Built into load functions - reads JSON on fallback, migrates to YAML on first write"
+  - description: "Remove deprecated JSON state files and update tests"
+    status: "completed"
+    proof: "Updated test_junction_utils.py, test_dispatch_utils.py to mock load_yaml_state for JSON fallback tests - all 103 tests pass"
+
 # Completed work:
+# v5.0-phase2: State Consolidation - junction/gear/dispatch state now in active_context.yaml runtime section (7 steps, YAML-first with JSON fallback)
+# v3.12: Auto-Learn File Patterns - zero-config lesson targeting, infers globs from proof (4 steps, 12 new tests)
+# v3.11.2: Auto-Categorization - system infers dismissal reasons from behavior (mismatched input → false_positive, stale → context_changed)
+# v3.11.1: Matching Quality Instrumentation - dismissal reason tracking, false positive/negative rates (3 steps, 13 new tests)
+# v3.11: Obligations MVP - Mechanical Learning - obligations track lesson application, LAR/RWR metrics (6 steps, 19 new tests)
+# v3.10.1: Proof-Grounded Memory - lessons protected by proof vitality (observations > claims), prune report shows protected (5 steps, 8 new tests)
+# v3.10: Living Memory Architecture - evergreen lessons, active surfacing, archive retention (6 steps, 199 tests)
+# v3.9.9: Resilient Proof Logging - atomic writes, session isolation, recovery mechanism (7 steps, 34 tests)
+# v4.0-test: Protocol v4.0 Human Use Test - verified all modes and transitions work correctly
+# v4.0: Protocol v4.0 Complete - Phase 1 (mode awareness), Phase 2 (mode behavior), Phase 3 (auto transitions)
+# v4.0-phase2: Mode-Specific Behavior - PLAN/REVIEW/DONE skip gears, ACTIVE runs gear engine (5 steps)
+# v4.0-phase1: Mode Awareness - mode field, detect_mode(), /edge plan|active|review|done subcommands, deprecation warnings (5 steps)
+# v3.9.10: Release-blocker fixes - junction UX with dismiss TTL, archive decision, protocol v4.0 spec (117 tests pass)
+# v4.0-spec: Protocol Specification v4.0 - allowances vs dismissals, observations vs claims, transactional state updates
+# v3.9.9: Lock recovery fix + readonly mode for junction_utils (96 tests pass)
 # v3.9.8: Eval Phase 2 Enforcement - auto-mismatch on failure, gate_on_fail blocking, 7-day retention, 43 tests
 # v4.0: Operator's Edge Universal - Codex CLI adapter (9 steps, 6 skills installed to ~/.codex/skills/)
 # v2.2: Code Review Fixes - quadtree animation fallback, splitLines() for cross-platform line endings, unified .node-shape class
@@ -151,195 +124,68 @@ plan:
 next_focus:
   # Gap Analysis Roadmap (P0-P2 priority)
   - "P0: Auto-detect mismatches from hook failures (PreToolUse blocks, PostToolUse unexpected state)"
-  - "P0: Evergreen principles library - add 'evergreen: true' flag, exempt from decay"
   - "P1: Skill-Hook alignment validator - detect drift between skill prompts and hook code"
   - "P1: Eval Phase 2 foundation - task bank schema (defer multi-run trials)"
   - "P2: Codex CLI command parity - port missing 9 commands or document gaps"
   - "P2: Verification enforcement upgrade - block at step completion, not PATROL"
   # Original digest recommendations
   - "Refactor proof_viz.js - high edit concentration"
+  # Completed (v3.10.1)
+  # - "P1: Reinforcement loop closure - DONE (v3.10.1) - proof vitality protects lessons from decay"
+  # Completed (v3.10)
+  # - "P0: Evergreen principles library - DONE (v3.10)"
 
 constraints:
-  - "Single canonical contract must drive CLI output, engine behavior, and docs"
-  - "No silent success on errors; failures must be surfaced truthfully"
-  - "Changes must remain cross-platform (no OS-specific tooling dependencies)"
-  - "Avoid breaking existing /edge-* commands unless explicitly deprecated"
+  - "Single canonical state - active_context.yaml is the ONLY truth"
+  - "Runtime state (junction/gear/dispatch) goes in runtime: section, not separate files"
+  - "Atomic writes with locking must be preserved during migration"
+  - "Backward compatibility - migrate existing JSON files on first read"
+  - "No breaking changes to /edge-* command behavior"
 
 # Known risks and how we're mitigating them
 risks:
-  - risk: "Schema changes break backward compatibility with existing state files or tooling"
-    mitigation: "Version schema and include migration/compat handling where needed"
-  - risk: "Race-safety changes introduce deadlocks or performance regressions"
-    mitigation: "Use minimal locking with timeouts and atomic writes; keep critical sections small"
-  - risk: "Behavior changes diverge from docs or command expectations"
-    mitigation: "Update docs/tests alongside code and add explicit deprecation notes"
+  - risk: "YAML is slower than JSON for frequent writes (junction, dispatch)"
+    mitigation: "Keep runtime section small, batch updates where possible, benchmark before/after"
+  - risk: "Lock contention - multiple modules writing to same file"
+    mitigation: "Use state_utils.atomic_yaml_write() with short critical sections"
+  - risk: "Migration breaks existing sessions with JSON state"
+    mitigation: "Auto-migrate JSON to YAML on first read, don't delete until confirmed working"
+  - risk: "Tests depend on JSON file paths"
+    mitigation: "Update test fixtures, add migration tests"
+
+mismatches: []
+  # Archived: mismatch-20260112-000001 - pytest fallback to unittest (resolved)
 
 # Memory (lessons with reinforcement tracking)
+# Decayed 27 stale lessons (2025-12-27 to 2026-01-06, reinforced <= 1, last_used > 7 days)
 memory:
+  # Reconciled from proof observations (v3.10.1)
   - trigger: "hooks"
     lesson: "Policy is not enforcement - hooks are enforcement"
-    reinforced: 4
-    last_used: "2026-01-03"
-  - trigger: "state change"
-    lesson: "Hash comparison verifies actual change, not just existence"
-    reinforced: 2
-    last_used: "2025-12-28"
-  - trigger: "claude code"
-    lesson: "Custom subagents work via .claude/agents/ (since v1.0.60) - use /agents to create"
-    reinforced: 1
-    last_used: "2026-01-03"
+    evergreen: true
+    reinforced: 32
+    last_used: "2026-01-13"
   - trigger: "paths"
     lesson: "pathlib.Path handles cross-platform paths correctly"
     reinforced: 3
     last_used: "2025-12-30"
-  - trigger: "commands"
-    lesson: "Claude Code commands require restart to load after installation"
-    reinforced: 2
-    last_used: "2025-12-28"
   - trigger: "python"
     lesson: "Windows uses 'python', Mac uses 'python3' - setup script handles this"
-    reinforced: 3
-    last_used: "2025-12-30"
-  - trigger: "windows transfer"
-    lesson: "Dotfiles (.claude/) don't copy to Windows by default - use ZIP"
-    reinforced: 2
-    last_used: "2025-12-27"
-  - trigger: "loop"
-    lesson: "Enforcement ensures loop runs; adaptation makes loop intelligent"
-    reinforced: 2
-    last_used: "2025-12-28"
-  - trigger: "commands"
-    lesson: "Single entry point (/edge) reduces cognitive load vs multiple commands"
-    reinforced: 2
-    last_used: "2025-12-28"
-  - trigger: "memory"
-    lesson: "Memory is taste, not storage - learn what to keep vs discard"
-    reinforced: 2
-    last_used: "2025-12-28"
+    reinforced: 20
+    last_used: "2026-01-13"
   - trigger: "archive"
     lesson: "Resolved = archived; only living context stays in active state"
-    reinforced: 3
-    last_used: "2025-12-30"
-  - trigger: "memory"
-    lesson: "Constant memory by construction beats unbounded growth"
-    reinforced: 2
-    last_used: "2025-12-28"
-  - trigger: "research"
-    lesson: "External handoff beats internal pretending - generate prompts for tools that do it better"
-    reinforced: 2
-    last_used: "2025-12-28"
+    reinforced: 14
+    last_used: "2026-01-13"
   - trigger: "refactoring"
     lesson: "Facade pattern enables refactoring without breaking consumers - re-export everything"
     reinforced: 3
     last_used: "2025-12-30"
-  - trigger: "imports"
-    lesson: "Absolute imports (not relative) work when hooks use sys.path.insert"
-    reinforced: 2
-    last_used: "2025-12-28"
-  - trigger: "dedup"
-    lesson: "Theme-based similarity catches semantic duplicates that string matching misses"
-    reinforced: 2
-    last_used: "2025-12-28"
-  - trigger: "yolo"
-    lesson: "Reversibility-gating provides safety without friction - auto-execute reversible, stage irreversible, block dangerous"
-    reinforced: 2
-    last_used: "2025-12-28"
-  - trigger: "classification"
-    lesson: "Classification order matters - check blocked first, then auto patterns, then supervised"
-    reinforced: 2
-    last_used: "2025-12-28"
-  - trigger: "yolo"
-    lesson: "Pre-tool hooks can return early with 'approve' for YOLO bypass, but hard blocks must be checked first"
-    reinforced: 2
-    last_used: "2025-12-28"
-  - trigger: "skills"
-    lesson: "Skill files cache at session start - changes require restart to take effect"
-    reinforced: 2
-    last_used: "2025-12-28"
-  - trigger: "complexity"
-    lesson: "Extract helpers until main function reads like an outline - each check returns early or delegates"
-    reinforced: 1
-    last_used: "2025-12-30"
-  - trigger: "research"
-    lesson: "Always copy research prompts to clipboard with pbcopy after creating them"
-    reinforced: 1
-    last_used: "2025-12-30"
-  - trigger: "lesson capture + timing"
-    lesson: "Capture lessons at resolution (understanding moment), not at scoring (recall moment)"
-    reinforced: 1
-    last_used: "2026-01-03"
-  - trigger: "enforcement + behavioral"
-    lesson: "Mechanical enforcement beats behavioral protocol - embed in existing flows, don't add new rituals"
-    reinforced: 1
-    last_used: "2026-01-03"
-  - trigger: "gear + mode switching"
-    lesson: "State detection determines gear, transitions are events - separate 'what mode' from 'how to switch'"
-    reinforced: 1
-    last_used: "2026-01-03"
-  - trigger: "autonomous + rate limit"
-    lesson: "Rate limit autonomous features by session (max N) not by time to prevent spam without blocking"
-    reinforced: 1
-    last_used: "2026-01-03"
-  - trigger: "three gears + operational modes"
-    lesson: "Active→Patrol→Dream provides natural idle progression - doing→checking→thinking mirrors productive work cycles"
-    reinforced: 1
-    last_used: "2026-01-03"
   - trigger: "skills + architecture"
     lesson: "Skills are prompts Claude interprets, not code Claude executes - for mechanical enforcement, hooks must call Python modules"
+    evergreen: true
     reinforced: 2
     last_used: "2026-01-03"
-  - trigger: "quality gate + transitions"
-    lesson: "Quality gates belong at state transitions, not session end - gate the behavior change, not the exit"
-    reinforced: 1
-    last_used: "2026-01-03"
-  - trigger: "severity + blocking"
-    lesson: "Errors block, warnings inform - severity determines whether to halt or notify"
-    reinforced: 1
-    last_used: "2026-01-03"
-  - trigger: "lessons + stale + outdated"
-    lesson: "Challenge lessons older than 7 days when relevant - tools and APIs change"
-    reinforced: 1
-    last_used: "2026-01-03"
-  - trigger: "svg + css + inline"
-    lesson: "SVG inline attributes (.attr) override CSS classes - use consistent styling approach"
-    reinforced: 1
-    last_used: "2026-01-04"
-  - trigger: "blend mode + dark background"
-    lesson: "mix-blend-mode: multiply makes colors invisible on dark backgrounds - use screen or no blend mode instead"
-    reinforced: 1
-    last_used: "2026-01-04"
-  - trigger: "svg fill override"
-    lesson: "SVG CSS class fill rules override .attr('fill') - use .style('fill') for inline styles that win over CSS"
-    reinforced: 1
-    last_used: "2026-01-05"
-  - trigger: "proof_viz html stale"
-    lesson: "proof_viz.html is static - must regenerate after code changes to proof_visualizer.py"
-    reinforced: 1
-    last_used: "2026-01-05"
-  - trigger: "codex cli + skills"
-    lesson: "Codex CLI skills go in ~/.codex/skills/<name>/SKILL.md for global availability; restart required after install"
-    reinforced: 1
-    last_used: "2026-01-06"
-  - trigger: "diff cache"
-    lesson: "Diff cache truncation (2000 chars + truncated flag) already exists in proof_viz_builders and is surfaced in proof_viz.js."
-    reinforced: 1
-    last_used: "2026-01-06"
-  - trigger: "debug logs"
-    lesson: "Guard proof_viz.js console output with PROOFVIZ_DEBUG + debugLog to avoid console spam."
-    reinforced: 1
-    last_used: "2026-01-06"
-  - trigger: "heatmap"
-    lesson: "Heatmap colors should use inline fill with important priority and clear inline fill when off to restore CSS."
-    reinforced: 1
-    last_used: "2026-01-06"
-  - trigger: "assets path"
-    lesson: "When mapping /assets/, strip query/fragment, URL-decode, resolve paths, and enforce base-dir containment to prevent traversal."
-    reinforced: 1
-    last_used: "2026-01-06"
-  - trigger: "css transitions"
-    lesson: "max-height: none cannot animate; focus-mode max-height overrides will snap by design."
-    reinforced: 1
-    last_used: "2026-01-06"
   - trigger: "eval integration"
     lesson: "Keep evals explicit via a single command to avoid default workflow friction."
     reinforced: 1
@@ -348,18 +194,42 @@ memory:
     lesson: "Auto-triage plus warn-only defaults keeps evals low-noise while still capturing signal."
     reinforced: 1
     last_used: "2026-01-10"
-  - trigger: "eval core"
-    lesson: "Snapshot payloads need size caps and truncation summaries to avoid storage/perf issues."
+  - trigger: "readonly mode + function signatures"
+    lesson: "Readonly mode functions return (result, warning) tuples - warning is None on success, message on read-only skip"
     reinforced: 1
-    last_used: "2026-01-10"
-  - trigger: "eval hooks"
-    lesson: "Limit eval automation to write/edit tools and keep warn-only defaults to avoid noisy gating."
+    last_used: "2026-01-12"
+  - trigger: "plan mode + automatic detection"
+    lesson: "Plan mode auto-detected via PreToolUse hook on EnterPlanMode - sets flag file that is_readonly() checks"
     reinforced: 1
-    last_used: "2026-01-10"
-  - trigger: "edge-eval"
-    lesson: "Keep manual eval commands as overrides even when automation is enabled."
+    last_used: "2026-01-12"
+  - trigger: "junction semantics + approve vs dismiss"
+    lesson: "Approve creates one-time allowance (consumed on use), dismiss creates time-limited auto-approve (expires after TTL) - distinct use cases"
     reinforced: 1
-    last_used: "2026-01-10"
+    last_used: "2026-01-12"
+  - trigger: "observations vs claims"
+    lesson: "Observations are system-captured facts (files modified, tools used), claims are Claude's statements (plan status) - quality gate validates claims against observations"
+    reinforced: 1
+    last_used: "2026-01-12"
+  - trigger: "lessons + memory + active surfacing"
+    lesson: "Lessons need active surfacing (at tool use, not just session start) to be useful - dormant infrastructure = wasted wisdom"
+    reinforced: 1
+    last_used: "2026-01-13"
+  - trigger: "proof-grounded memory + decay"
+    lesson: "Proof observations (lesson_match in logs) override YAML claims (reinforced count) for decay decisions - the system's own principle of 'observations > claims' applies to itself"
+    reinforced: 1
+    last_used: "2026-01-13"
+  - trigger: "obligations + mechanical learning"
+    lesson: "Obligations bridge 'lesson surfaced' to 'lesson applied' - created in PreToolUse, auto-resolved in PostToolUse, metrics (LAR/RWR) reveal learning effectiveness"
+    reinforced: 1
+    last_used: "2026-01-13"
+  - trigger: "measure before optimize"
+    lesson: "Instrument the gap before adding complexity - track dismissal reasons (false_positive, wrong_lesson) to measure if keyword matching actually fails before adding embeddings"
+    reinforced: 1
+    last_used: "2026-01-13"
+  - trigger: "auto-learning + file patterns"
+    lesson: "Lessons can auto-learn file patterns from proof - after 3+ successful applications to similar files, the system infers a glob pattern and only surfaces lessons for matching file types"
+    reinforced: 1
+    last_used: "2026-01-13"
 
 
 # Self-assessment
@@ -390,5 +260,55 @@ self_score:
 # Archive reference
 archive:
   path: ".proof/archive.jsonl"
-  last_prune: "2026-01-04T03:10:00"
-  entries_archived: 145
+  last_prune: "2026-01-13T15:25:00"
+  entries_archived: 149  # +4 completed steps
+
+# =============================================================================
+# RUNTIME STATE (v5 schema - consolidated from separate JSON files)
+# This section replaces junction_state.json, gear_state.json, dispatch_state.json
+# =============================================================================
+runtime:
+  # Junction gate state (was junction_state.json)
+  junction:
+    pending: null
+    suppressions: []
+    history_tail:
+    - id: "ea2db296-d6b5-436c-b6e4-7a37118c0f91"
+      type: "test_type"
+      decision: "approve"
+      decided_at: "2026-01-13T17:11:23.065943"
+  gear:
+    current: "active"
+    entered_at: "2026-01-13T18:14:38.101238"
+    last_run_at: "2026-01-13T18:14:37.721010"
+    last_transition: "patrol_to_active"
+    iterations: 0
+    patrol_findings_count: 5
+    dream_proposals_count: 0
+    completion_epoch: null
+  dispatch:
+    enabled: true
+    state: "stopped"
+    iteration: 10
+    stuck_count: 0
+    stats:
+      auto_executed: 0
+      junctions_hit: 0
+      objectives_completed: 0
+    history: []
+    junction:
+      pending:
+        id: "2eec44ed-b888-4c6c-9a46-d8b9b4d8e434"
+        type: "finding_selection"
+        payload:
+          reason: "Select a finding to work on"
+          gear: "patrol"
+        created_at: "2026-01-13T19:56:42.016467"
+        source: "edge"
+      suppressions: []
+      history_tail:
+      - id: "ea2db296-d6b5-436c-b6e4-7a37118c0f91"
+        type: "test_type"
+        decision: "approve"
+        decided_at: "2026-01-13T17:11:23.065943"
+    scout: {}

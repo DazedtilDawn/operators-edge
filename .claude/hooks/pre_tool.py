@@ -87,6 +87,31 @@ def check_retry_blocking(cmd):
                 "Explain your new approach before retrying.")
     return None
 
+def check_relevant_lessons(tool_name, tool_input, state):
+    """
+    Surface lessons relevant to this tool execution (v3.10).
+    Returns list of relevant lessons (guidance, not a gate).
+    """
+    if tool_name not in ("Edit", "Write", "NotebookEdit", "Bash"):
+        return []
+
+    if not state:
+        return []
+
+    try:
+        from memory_utils import surface_relevant_memory
+
+        # Build context from tool input
+        file_path = tool_input.get("file_path", "")
+        command = tool_input.get("command", "")
+        context = f"{tool_name} {file_path} {command}"
+
+        # v3.12: Pass file_path for learned pattern filtering
+        return surface_relevant_memory(state, context, file_path=file_path if file_path else None)
+    except (ImportError, Exception):
+        return []
+
+
 def check_plan_requirement(tool_name, tool_input):
     """
     Require a plan in active_context.yaml before allowing edits.
@@ -161,22 +186,54 @@ def main():
     if result:
         respond(*result)
 
+    # Load state for lesson surfacing and evals
+    state = load_yaml_state()
+
+    # v3.10: Surface relevant lessons (guidance, not a gate)
+    relevant_lessons = check_relevant_lessons(tool_name, tool_input, state)
+
+    # v3.11: Create obligations for surfaced lessons (Mechanical Learning)
+    if relevant_lessons:
+        try:
+            from obligation_utils import create_obligation, log_obligation_event
+            from proof_utils import log_to_session
+
+            session_id = state.get('session', {}).get('id', '') if state else ''
+
+            for lesson in relevant_lessons:
+                ob = create_obligation(
+                    lesson_trigger=lesson.get('trigger', ''),
+                    lesson_text=lesson.get('lesson', ''),
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                    session_id=session_id
+                )
+                # Log to proof
+                log_entry = log_obligation_event("created", ob, session_id)
+                log_to_session(log_entry)
+        except (ImportError, Exception):
+            pass  # Obligation system unavailable, continue without
+
     # Eval automation: capture pre-tool snapshot for write/edit tools
     if tool_name in ("Edit", "Write", "NotebookEdit"):
-        state = load_yaml_state()
-        evals_config = get_evals_config(state)
-        evals_config, _triage = auto_triage(state, evals_config, tool_name)
+        if state:
+            evals_config = get_evals_config(state)
+            evals_config, _triage = auto_triage(state, evals_config, tool_name)
 
-        if evals_config.get("enabled", True) and evals_config.get("mode") != "manual":
-            if evals_config.get("level", 0) >= 1 and evals_config.get("snapshots", {}).get("enabled", True):
-                pending_run = start_eval_run(evals_config, tool_name)
-                eval_state = load_eval_state()
-                eval_state["pending_run"] = pending_run
-                eval_state["triage"] = evals_config.get("triage", {})
-                save_eval_state(eval_state)
+            if evals_config.get("enabled", True) and evals_config.get("mode") != "manual":
+                if evals_config.get("level", 0) >= 1 and evals_config.get("snapshots", {}).get("enabled", True):
+                    pending_run = start_eval_run(evals_config, tool_name)
+                    eval_state = load_eval_state()
+                    eval_state["pending_run"] = pending_run
+                    eval_state["triage"] = evals_config.get("triage", {})
+                    save_eval_state(eval_state)
 
-    # All checks passed
-    respond("approve", "Passed all pre-tool checks")
+    # All checks passed - include relevant lessons in approval message
+    if relevant_lessons:
+        lesson_text = "\n".join([f"  - [{l['trigger']}]: {l['lesson']}" for l in relevant_lessons])
+        respond("approve", f"Relevant lessons:\n{lesson_text}")
+    else:
+        respond("approve", "Passed all pre-tool checks")
 
 if __name__ == "__main__":
     main()

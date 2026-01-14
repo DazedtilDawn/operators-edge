@@ -39,7 +39,13 @@ from quality_gate import (
     run_quality_gate, QualityGateResult,
     format_quality_gate_result, format_quality_junction,
 )
-from state_utils import write_json_atomic
+from state_utils import (
+    write_json_atomic, load_yaml_state,
+    get_runtime_section, update_runtime_section,
+)
+
+# Feature flag: set to True to use YAML runtime section (v5 schema)
+USE_YAML_RUNTIME = True
 
 
 # =============================================================================
@@ -81,30 +87,124 @@ class GearEngineResult:
 GEAR_STATE_FILE = Path(".claude/state/gear_state.json")
 
 
-def load_gear_state() -> GearState:
-    """Load gear state from file or create default."""
+def _load_from_yaml_runtime() -> Optional[GearState]:
+    """Load gear state from YAML runtime section (v5 schema)."""
+    if not USE_YAML_RUNTIME:
+        return None
+
+    yaml_state = load_yaml_state()
+    if not yaml_state:
+        return None
+
+    gear = get_runtime_section(yaml_state, "gear")
+    if not gear:
+        return None
+
+    # Convert YAML format to GearState
+    return GearState(
+        current_gear=Gear(gear.get("current", "active")),
+        entered_at=gear.get("entered_at"),
+        last_run_at=gear.get("last_run_at"),
+        last_transition=gear.get("last_transition"),
+        iterations=gear.get("iterations", 0),
+        patrol_findings_count=gear.get("patrol_findings_count", 0),
+        dream_proposals_count=gear.get("dream_proposals_count", 0),
+        completion_epoch=gear.get("completion_epoch"),
+    )
+
+
+def _load_from_json_file() -> Optional[GearState]:
+    """Load gear state from legacy JSON file."""
     try:
         if GEAR_STATE_FILE.exists():
             data = json.loads(GEAR_STATE_FILE.read_text())
             return GearState.from_dict(data)
     except (json.JSONDecodeError, IOError):
         pass
+    return None
+
+
+def load_gear_state() -> GearState:
+    """Load gear state from YAML runtime (preferred) or JSON file (fallback)."""
+    # v5: Try YAML runtime section first
+    state = _load_from_yaml_runtime()
+    if state:
+        return state
+
+    # Fallback: Load from JSON file
+    state = _load_from_json_file()
+    if state:
+        # Migrate to YAML on first load
+        if USE_YAML_RUNTIME:
+            _save_to_yaml_runtime(state)
+        return state
+
     return get_default_gear_state()
 
 
-def save_gear_state(gear_state: GearState) -> None:
-    """Save gear state to file."""
+def _save_to_yaml_runtime(gear_state: GearState) -> bool:
+    """Save gear state to YAML runtime section (v5 schema)."""
+    if not USE_YAML_RUNTIME:
+        return False
+
+    # Check if YAML state exists with runtime section before attempting write
+    yaml_state = load_yaml_state()
+    if not yaml_state or "runtime" not in yaml_state:
+        return False  # No YAML runtime section, fall back to JSON
+
+    # Convert GearState to YAML format
+    yaml_data = {
+        "current": gear_state.current_gear.value,
+        "entered_at": gear_state.entered_at,
+        "last_run_at": gear_state.last_run_at,
+        "last_transition": gear_state.last_transition,
+        "iterations": gear_state.iterations,
+        "patrol_findings_count": gear_state.patrol_findings_count,
+        "dream_proposals_count": gear_state.dream_proposals_count,
+        "completion_epoch": gear_state.completion_epoch,
+    }
+
+    return update_runtime_section("gear", yaml_data)
+
+
+def _save_to_json_file(gear_state: GearState) -> Tuple[bool, Optional[str]]:
+    """Save gear state to legacy JSON file (fallback)."""
     try:
         write_json_atomic(GEAR_STATE_FILE, gear_state.to_dict(), indent=2)
-    except (IOError, OSError, TimeoutError):
-        pass  # Non-critical
+        return (True, None)
+    except TimeoutError as e:
+        return (False, f"State lock busy: {e}")
+    except (IOError, OSError) as e:
+        return (False, f"Failed to save gear state: {e}")
 
 
-def reset_gear_state() -> GearState:
-    """Reset gear state to default."""
+def save_gear_state(gear_state: GearState) -> Tuple[bool, Optional[str]]:
+    """
+    Save gear state to YAML runtime section (preferred) or JSON file (fallback).
+
+    Returns:
+        (success, error_message) - True and None on success,
+        False and error message on failure.
+    """
+    # v5: Try YAML runtime section first
+    if USE_YAML_RUNTIME and _save_to_yaml_runtime(gear_state):
+        return (True, None)
+
+    # Fall back to JSON
+    return _save_to_json_file(gear_state)
+
+
+def reset_gear_state() -> Tuple[GearState, Optional[str]]:
+    """
+    Reset gear state to default.
+
+    Returns:
+        (state, error_message) - state is always returned,
+        error_message is None on success, or contains the error on failure.
+    """
     state = get_default_gear_state()
-    save_gear_state(state)
-    return state
+    success, error = save_gear_state(state)
+    return (state, error)
 
 
 # =============================================================================
@@ -202,6 +302,7 @@ def run_gear_engine(
     """
     # Load current gear state
     gear_state = load_gear_state()
+    persistence_warnings = []
 
     # Clear completion epoch if objective is no longer complete
     if not _is_objective_complete(state) and gear_state.completion_epoch is not None:
@@ -216,33 +317,44 @@ def run_gear_engine(
         transition = _find_transition(gear_state.current_gear, detected_gear)
         if transition:
             gear_state = execute_transition(gear_state, transition)
-            save_gear_state(gear_state)
+            success, error = save_gear_state(gear_state)
+            if not success:
+                persistence_warnings.append(f"Transition not persisted: {error}")
 
     # Execute the current gear
     gear_state.iterations += 1
     gear_state.last_run_at = datetime.now().isoformat()
-    save_gear_state(gear_state)
+    success, error = save_gear_state(gear_state)
+    if not success:
+        persistence_warnings.append(f"Iteration not persisted: {error}")
 
     if gear_state.current_gear == Gear.ACTIVE:
-        return _run_active(state, gear_state, project_dir)
+        result = _run_active(state, gear_state, project_dir)
     elif gear_state.current_gear == Gear.PATROL:
-        return _run_patrol(state, gear_state, project_dir)
+        result = _run_patrol(state, gear_state, project_dir)
     elif gear_state.current_gear == Gear.DREAM:
-        return _run_dream(state, gear_state)
+        result = _run_dream(state, gear_state)
+    else:
+        # Fallback
+        result = GearEngineResult(
+            gear_executed=Gear.ACTIVE,
+            transitioned=False,
+            new_gear=None,
+            transition_type=None,
+            gear_result={},
+            junction_hit=False,
+            junction_type=None,
+            junction_reason=None,
+            continue_loop=False,
+            display_message="Unknown gear state",
+        )
 
-    # Fallback
-    return GearEngineResult(
-        gear_executed=Gear.ACTIVE,
-        transitioned=False,
-        new_gear=None,
-        transition_type=None,
-        gear_result={},
-        junction_hit=False,
-        junction_type=None,
-        junction_reason=None,
-        continue_loop=False,
-        display_message="Unknown gear state",
-    )
+    # Append any persistence warnings to the display message
+    if persistence_warnings:
+        warnings_text = "\n".join(f"[WARNING] {w}" for w in persistence_warnings)
+        result.display_message = f"{result.display_message}\n\n{warnings_text}"
+
+    return result
 
 
 def _find_transition(from_gear: Gear, to_gear: Gear) -> Optional[GearTransition]:
@@ -308,7 +420,21 @@ def _run_active(
             if completion_epoch and gear_state.completion_epoch == completion_epoch:
                 new_state = execute_transition(gear_state, transition)
                 new_state.completion_epoch = completion_epoch
-                save_gear_state(new_state)
+                success, error = save_gear_state(new_state)
+                if not success:
+                    # Don't report transition if save failed
+                    return GearEngineResult(
+                        gear_executed=Gear.ACTIVE,
+                        transitioned=False,
+                        new_gear=None,
+                        transition_type=None,
+                        gear_result=result.to_dict(),
+                        junction_hit=False,
+                        junction_type=None,
+                        junction_reason=None,
+                        continue_loop=False,
+                        display_message=f"Quality gate already passed but transition failed to persist: {error}",
+                    )
                 return GearEngineResult(
                     gear_executed=Gear.ACTIVE,
                     transitioned=True,
@@ -347,7 +473,24 @@ def _run_active(
             new_state = execute_transition(gear_state, transition)
             if completion_epoch:
                 new_state.completion_epoch = completion_epoch
-            save_gear_state(new_state)
+            success, error = save_gear_state(new_state)
+            if not success:
+                # Don't report transition if save failed
+                return GearEngineResult(
+                    gear_executed=Gear.ACTIVE,
+                    transitioned=False,
+                    new_gear=None,
+                    transition_type=None,
+                    gear_result={
+                        **result.to_dict(),
+                        "quality_gate": quality_result.to_dict(),
+                    },
+                    junction_hit=False,
+                    junction_type=None,
+                    junction_reason=None,
+                    continue_loop=False,
+                    display_message=f"Quality gate passed but transition failed to persist: {error}\n{format_quality_gate_result(quality_result)}",
+                )
             return GearEngineResult(
                 gear_executed=Gear.ACTIVE,
                 transitioned=True,
@@ -386,17 +529,36 @@ def _run_patrol(
 ) -> GearEngineResult:
     """Execute Patrol Gear."""
     result = run_patrol_scan(state, project_dir)
+    persistence_warning = None
 
     # Update findings count
     gear_state.patrol_findings_count += result.findings_count
-    save_gear_state(gear_state)
+    success, error = save_gear_state(gear_state)
+    if not success:
+        persistence_warning = f"Findings count not persisted: {error}"
 
     # Check for transition
     should_transition, transition = should_transition_from_patrol(result, gear_state)
 
     if should_transition and transition:
         new_state = execute_transition(gear_state, transition)
-        save_gear_state(new_state)
+        success, error = save_gear_state(new_state)
+
+        if not success:
+            # Don't report transition if save failed
+            display_msg = f"{format_patrol_status(result)}\n\n[WARNING] Transition failed to persist: {error}"
+            return GearEngineResult(
+                gear_executed=Gear.PATROL,
+                transitioned=False,
+                new_gear=None,
+                transition_type=None,
+                gear_result=result.to_dict(),
+                junction_hit=False,
+                junction_type=None,
+                junction_reason=None,
+                continue_loop=False,
+                display_message=display_msg,
+            )
 
         if transition == GearTransition.PATROL_TO_ACTIVE:
             return GearEngineResult(
@@ -412,6 +574,9 @@ def _run_patrol(
                 display_message=format_patrol_status(result),
             )
         elif transition == GearTransition.PATROL_TO_DREAM:
+            display_msg = "No findings → Dream"
+            if persistence_warning:
+                display_msg = f"{display_msg}\n\n[WARNING] {persistence_warning}"
             return GearEngineResult(
                 gear_executed=Gear.PATROL,
                 transitioned=True,
@@ -422,9 +587,12 @@ def _run_patrol(
                 junction_type=None,
                 junction_reason=None,
                 continue_loop=True,  # Continue to Dream
-                display_message="No findings → Dream",
+                display_message=display_msg,
             )
 
+    display_msg = format_patrol_status(result)
+    if persistence_warning:
+        display_msg = f"{display_msg}\n\n[WARNING] {persistence_warning}"
     return GearEngineResult(
         gear_executed=Gear.PATROL,
         transitioned=False,
@@ -435,7 +603,7 @@ def _run_patrol(
         junction_type=None,
         junction_reason=None,
         continue_loop=False,
-        display_message=format_patrol_status(result),
+        display_message=display_msg,
     )
 
 
@@ -445,17 +613,23 @@ def _run_dream(
 ) -> GearEngineResult:
     """Execute Dream Gear."""
     result = run_dream_gear(state, gear_state)
+    persistence_warning = None
 
     # Update proposal count
     if result.proposal:
         gear_state.dream_proposals_count += 1
-        save_gear_state(gear_state)
+        success, error = save_gear_state(gear_state)
+        if not success:
+            persistence_warning = f"Proposal count not persisted: {error}"
 
     # Check for transition
     should_transition, transition = should_transition_from_dream(result, gear_state)
 
     # If proposal generated, junction for approval
     if result.proposal:
+        display_msg = format_dream_status(result)
+        if persistence_warning:
+            display_msg = f"{display_msg}\n\n[WARNING] {persistence_warning}"
         return GearEngineResult(
             gear_executed=Gear.DREAM,
             transitioned=False,
@@ -466,13 +640,27 @@ def _run_dream(
             junction_type="proposal",
             junction_reason="Review proposal",
             continue_loop=False,  # Wait for user
-            display_message=format_dream_status(result),
+            display_message=display_msg,
         )
 
     # Transition back to Patrol
     if should_transition and transition:
         new_state = execute_transition(gear_state, transition)
-        save_gear_state(new_state)
+        success, error = save_gear_state(new_state)
+        if not success:
+            # Don't report transition if save failed
+            return GearEngineResult(
+                gear_executed=Gear.DREAM,
+                transitioned=False,
+                new_gear=None,
+                transition_type=None,
+                gear_result=result.to_dict(),
+                junction_hit=False,
+                junction_type=None,
+                junction_reason=None,
+                continue_loop=False,
+                display_message=f"Reflection complete but transition failed to persist: {error}",
+            )
         return GearEngineResult(
             gear_executed=Gear.DREAM,
             transitioned=True,

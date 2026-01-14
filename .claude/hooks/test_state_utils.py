@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import tempfile
+from datetime import datetime
 import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -142,6 +143,30 @@ class TestFileHash(unittest.TestCase):
         self.assertIsNone(file_hash("/nonexistent/file.txt"))
 
 
+class TestFileLocking(unittest.TestCase):
+    """Tests for file locking behavior."""
+
+    def test_lock_contention_times_out_cleanly(self):
+        """file_lock() should raise TimeoutError (not AttributeError) on contention."""
+        from state_utils import file_lock, _lock_path_for
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target = Path(tmpdir) / "state.json"
+            lock_path = _lock_path_for(target)
+            lock_path.write_text(json.dumps({
+                "pid": os.getpid(),
+                "created_at": datetime.now().isoformat(),
+                "host": "test",
+            }))
+            try:
+                with self.assertRaises(TimeoutError):
+                    with file_lock(target, timeout_seconds=0.05, poll_interval=0.01):
+                        pass
+            finally:
+                if lock_path.exists():
+                    lock_path.unlink()
+
+
 class TestFailureLogging(unittest.TestCase):
     """Tests for failure logging functions."""
 
@@ -176,23 +201,17 @@ class TestFailureLogging(unittest.TestCase):
 class TestProofLogging(unittest.TestCase):
     """Tests for log_proof() function."""
 
-    @patch('state_utils.get_proof_dir')
-    def test_log_proof(self, mock_proof_dir):
-        """log_proof() should append to session log."""
+    @patch('proof_utils.log_proof_entry')
+    def test_log_proof(self, mock_log_entry):
+        """log_proof() should delegate to proof_utils.log_proof_entry()."""
         from state_utils import log_proof
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mock_proof_dir.return_value = Path(tmpdir)
+        mock_log_entry.return_value = {"tool": "TestTool", "success": True}
 
-            log_proof("TestTool", {"key": "value"}, "result", True)
+        log_proof("TestTool", {"key": "value"}, "result", True)
 
-            log_file = Path(tmpdir) / "session_log.jsonl"
-            self.assertTrue(log_file.exists())
-
-            content = log_file.read_text()
-            entry = json.loads(content.strip())
-            self.assertEqual(entry["tool"], "TestTool")
-            self.assertTrue(entry["success"])
+        # Verify delegation happened
+        mock_log_entry.assert_called_once_with("TestTool", {"key": "value"}, "result", True)
 
 
 class TestStateHelpers(unittest.TestCase):
@@ -552,6 +571,138 @@ plan:
             if updated:
                 new_content = yaml_file.read_text()
                 self.assertIn("current_step: 2", new_content)
+
+
+# =============================================================================
+# v5 Schema: Runtime State Tests
+# =============================================================================
+
+class TestRuntimeState(unittest.TestCase):
+    """Tests for runtime state functions (v5 schema)."""
+
+    def test_get_runtime_section_with_state(self):
+        """get_runtime_section should extract runtime from provided state."""
+        from state_utils import get_runtime_section
+
+        state = {
+            "runtime": {
+                "junction": {"pending": None},
+                "gear": {"current": "active"},
+                "dispatch": {"enabled": True},
+            }
+        }
+
+        # Get entire runtime
+        runtime = get_runtime_section(state)
+        self.assertEqual(runtime["gear"]["current"], "active")
+
+        # Get specific section
+        junction = get_runtime_section(state, "junction")
+        self.assertIsNone(junction["pending"])
+
+        gear = get_runtime_section(state, "gear")
+        self.assertEqual(gear["current"], "active")
+
+    def test_get_runtime_section_missing(self):
+        """get_runtime_section should return empty dict if missing."""
+        from state_utils import get_runtime_section
+
+        state = {"objective": "test"}
+        runtime = get_runtime_section(state)
+        self.assertEqual(runtime, {})
+
+        junction = get_runtime_section(state, "junction")
+        self.assertEqual(junction, {})
+
+    def test_serialize_runtime_value_primitives(self):
+        """_serialize_runtime_value should handle primitives."""
+        from state_utils import _serialize_runtime_value
+
+        self.assertEqual(_serialize_runtime_value(None), "null")
+        self.assertEqual(_serialize_runtime_value(True), "true")
+        self.assertEqual(_serialize_runtime_value(False), "false")
+        self.assertEqual(_serialize_runtime_value(42), "42")
+        self.assertEqual(_serialize_runtime_value(3.14), "3.14")
+
+    def test_serialize_runtime_value_strings(self):
+        """_serialize_runtime_value should quote strings appropriately."""
+        from state_utils import _serialize_runtime_value
+
+        # Regular strings get quoted
+        self.assertEqual(_serialize_runtime_value("hello"), '"hello"')
+        # Strings that look like other types get quoted
+        self.assertEqual(_serialize_runtime_value("true"), '"true"')
+        self.assertEqual(_serialize_runtime_value("123"), '"123"')
+
+    def test_serialize_runtime_value_empty_collections(self):
+        """_serialize_runtime_value should handle empty collections."""
+        from state_utils import _serialize_runtime_value
+
+        self.assertEqual(_serialize_runtime_value([]), "[]")
+        self.assertEqual(_serialize_runtime_value({}), "{}")
+
+    def test_migrate_json_runtime_state(self):
+        """migrate_json_runtime_state should read from JSON files."""
+        from state_utils import migrate_json_runtime_state, get_state_dir
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('state_utils.get_state_dir', return_value=Path(tmpdir)):
+                # Create test JSON files
+                state_dir = Path(tmpdir)
+
+                # Junction state
+                junction_data = {
+                    "pending": {"id": "test-123", "type": "test"},
+                    "suppression": [{"fingerprint": "abc", "expires_at": "2026-01-01"}],
+                    "history_tail": [{"id": "h1", "type": "t", "decision": "approve"}]
+                }
+                (state_dir / "junction_state.json").write_text(json.dumps(junction_data))
+
+                # Gear state
+                gear_data = {
+                    "current_gear": "patrol",
+                    "entered_at": "2026-01-01",
+                    "iterations": 5
+                }
+                (state_dir / "gear_state.json").write_text(json.dumps(gear_data))
+
+                # Dispatch state
+                dispatch_data = {
+                    "enabled": True,
+                    "state": "running",
+                    "iteration": 10
+                }
+                (state_dir / "dispatch_state.json").write_text(json.dumps(dispatch_data))
+
+                # Migrate
+                result = migrate_json_runtime_state()
+
+                # Verify junction
+                self.assertEqual(result["junction"]["pending"]["id"], "test-123")
+                self.assertEqual(len(result["junction"]["suppressions"]), 1)
+
+                # Verify gear
+                self.assertEqual(result["gear"]["current"], "patrol")
+                self.assertEqual(result["gear"]["iterations"], 5)
+
+                # Verify dispatch
+                self.assertTrue(result["dispatch"]["enabled"])
+                self.assertEqual(result["dispatch"]["state"], "running")
+
+    def test_migrate_json_runtime_state_missing_files(self):
+        """migrate_json_runtime_state should handle missing files gracefully."""
+        from state_utils import migrate_json_runtime_state
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('state_utils.get_state_dir', return_value=Path(tmpdir)):
+                result = migrate_json_runtime_state()
+
+                # Should return empty sections, not crash
+                self.assertEqual(result["junction"], {})
+                self.assertEqual(result["gear"], {})
+                self.assertEqual(result["dispatch"], {})
 
 
 if __name__ == '__main__':
