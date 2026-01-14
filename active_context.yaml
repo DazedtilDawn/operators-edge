@@ -3,15 +3,15 @@
 
 # Current session (updated by session_start hook)
 session:
-  id: "20260113-v4-complete"
+  id: "20260113-tas-v1-commit"
   started_at: "2026-01-13T09:00:00"
-  note: "Protocol v4.0 complete - mode awareness, behavior, transitions"
+  note: "TAS v1.0 COMMITTED - c3fbb48"
 
   state_hash_start: "68c413a8a31df2033deba53cb708e7f85b819196cc5643eb3a7445f16712e1dd"
 mode: "active"
 
 # What are we trying to achieve?
-objective: "TAS v1.0: Trustworthy Autonomy Spec Implementation"
+objective: "TAS v1.0: Trustworthy Autonomy Spec Implementation - COMPLETE"
 
 # Current position in the plan
 current_step: 5
@@ -33,6 +33,7 @@ plan:
     proof: "scorecard_utils.py created (15 tests pass), integrated into DONE mode and dispatch completion, governor recommends autonomy adjustments"
 
 # Completed work:
+# TAS v1.0: Trustworthy Autonomy - dispatch_hook.py, scorecard_utils.py, governor - commit c3fbb48 (4 phases, 54 tests)
 # v5.0-phase2: State Consolidation - junction/gear/dispatch state now in active_context.yaml runtime section (7 steps, YAML-first with JSON fallback)
 # v3.12: Auto-Learn File Patterns - zero-config lesson targeting, infers globs from proof (4 steps, 12 new tests)
 # v3.11.2: Auto-Categorization - system infers dismissal reasons from behavior (mismatched input → false_positive, stale → context_changed)
@@ -278,36 +279,17 @@ runtime:
     dream_proposals_count: 0
     completion_epoch: null
   dispatch:
-    enabled: true
-    state: "stopped"
+    enabled: false
+    state: "complete"
     iteration: 10
     stuck_count: 0
     stats:
       auto_executed: 0
       junctions_hit: 0
-      objectives_completed: 0
-    history: []
-    junction:
-      pending:
-        id: "054477c2-34b2-4f5a-bb15-4d389e7c2dfb"
-        type: "finding_selection"
-        payload:
-          reason: "Select a finding to work on"
-          gear:
-            current: "patrol"
-            entered_at: "2026-01-13T23:03:46.237545"
-            last_run_at: "2026-01-13T23:03:46.238987"
-            last_transition: "active_to_patrol"
-            iterations: 1
-            patrol_findings_count: 5
-            dream_proposals_count: 0
-            completion_epoch: null
-        created_at: "2026-01-13T20:21:20.322293"
-        source: "edge"
-      suppressions: []
-      history_tail:
-      - id: "ea2db296-d6b5-436c-b6e4-7a37118c0f91"
-        type: "test_type"
-        decision: "approve"
-        decided_at: "2026-01-13T17:11:23.065943"
+      objectives_completed: 1
+    history:
+      - action: "complete"
+        result: "TAS v1.0 committed - c3fbb48"
+        timestamp: "2026-01-13T23:45:00"
+    junction: null
     scout: {}
