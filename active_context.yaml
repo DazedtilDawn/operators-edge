@@ -11,7 +11,7 @@ session:
 mode: "active"
 
 # What are we trying to achieve?
-objective: "TAS v1.0: Trustworthy Autonomy Spec Implementation - COMPLETE"
+objective: "Refactor identify_decayed_memory() - reduce complexity"
 
 # Current position in the plan
 current_step: 5
@@ -19,18 +19,18 @@ current_step: 5
 # The plan - each step must have description, status, and proof
 # Status: pending | in_progress | completed | blocked
 plan:
-  - description: "Phase A: Make UI truthful - SessionStart uses dispatch_utils.get_dispatch_status()"
+  - description: "Extract date parsing helper"
     status: "completed"
-    proof: "session_start.py now imports from dispatch_utils, _output_dispatch_status() is canonical, tests updated (18 pass)"
-  - description: "Phase B: Make /edge-yolo mechanical - hook-driven loop using dispatch_utils"
+    proof: "Added parse_last_used_date() helper at line 358, updated identify_decayed_memory() to use it"
+  - description: "Extract decay decision predicate"
     status: "completed"
-    proof: "dispatch_hook.py created, settings.json updated with hook matcher, edge_skill_hook.py integrated (21 new tests pass)"
-  - description: "Phase C: Couple memory to execution - surface top 3 lessons at step, reinforce on success"
+    proof: "Added check_lesson_decay() helper at line 380, main loop now 3 lines vs 15"
+  - description: "Clean up vitality import"
     status: "completed"
-    proof: "Already implemented: gear_active.py:get_lessons_for_current_step(), pre_tool.py obligations, proof-grounded reinforcement"
-  - description: "Phase D: Outcome scorecard + governor - write scorecard on completion, self-tune"
+    proof: "Added is_lesson_vital() helper at line 380, main function now 18 lines vs 40"
+  - description: "Run tests to verify no behavior change"
     status: "completed"
-    proof: "scorecard_utils.py created (15 tests pass), integrated into DONE mode and dispatch completion, governor recommends autonomy adjustments"
+    proof: "37 archive_utils tests pass, 2 importability tests pass"
 
 # Completed work:
 # TAS v1.0: Trustworthy Autonomy - dispatch_hook.py, scorecard_utils.py, governor - commit c3fbb48 (4 phases, 54 tests)
@@ -253,7 +253,7 @@ self_score:
 archive:
   path: ".proof/archive.jsonl"
   last_prune: "2026-01-13T15:25:00"
-  entries_archived: 149  # +4 completed steps
+  entries_archived: 152  # +3 TAS phases archived
 
 # =============================================================================
 # RUNTIME STATE (v5 schema - consolidated from separate JSON files)
@@ -271,11 +271,11 @@ runtime:
       decided_at: "2026-01-13T17:11:23.065943"
   gear:
     current: "active"
-    entered_at: "2026-01-13T18:14:38.101238"
-    last_run_at: "2026-01-13T18:14:37.721010"
+    entered_at: "2026-01-14T01:02:50.928137"
+    last_run_at: "2026-01-14T01:02:48.599043"
     last_transition: "patrol_to_active"
     iterations: 0
-    patrol_findings_count: 5
+    patrol_findings_count: 15
     dream_proposals_count: 0
     completion_epoch: null
   dispatch:
@@ -291,5 +291,19 @@ runtime:
       - action: "complete"
         result: "TAS v1.0 committed - c3fbb48"
         timestamp: "2026-01-13T23:45:00"
-    junction: null
+    junction:
+      pending:
+        id: "26c90799-55c5-454b-928d-369abc18782d"
+        type: "finding_selection"
+        payload:
+          reason: "Select a finding to work on"
+          gear: "patrol"
+        created_at: "2026-01-14T01:08:11.528989"
+        source: "edge"
+      suppressions: []
+      history_tail:
+      - id: "ea2db296-d6b5-436c-b6e4-7a37118c0f91"
+        type: "test_type"
+        decision: "approve"
+        decided_at: "2026-01-13T17:11:23.065943"
     scout: {}

@@ -350,6 +350,90 @@ def identify_prunable_mismatches(state):
     return prunable
 
 
+# =============================================================================
+# MEMORY DECAY HELPERS (extracted for clarity)
+# =============================================================================
+
+def parse_last_used_date(last_used: str) -> datetime:
+    """
+    Parse a last_used date string into a datetime object.
+
+    Handles both formats:
+    - Full ISO datetime: "2026-01-13T12:00:00"
+    - Date only: "2026-01-13"
+
+    Returns:
+        datetime object, or None if parsing fails
+    """
+    if not last_used:
+        return None
+    try:
+        if 'T' in last_used:
+            return datetime.fromisoformat(last_used.replace('Z', '+00:00'))
+        else:
+            return datetime.strptime(last_used, '%Y-%m-%d')
+    except (ValueError, TypeError):
+        return None
+
+
+def is_lesson_vital(trigger: str) -> bool:
+    """
+    Check if a lesson is protected by proof vitality.
+
+    Uses lazy import to avoid circular dependency with proof_utils.
+
+    Returns:
+        True if lesson has recent proof observations, False otherwise
+    """
+    if not trigger:
+        return False
+
+    try:
+        from proof_utils import check_lesson_vitality
+        vitality_threshold = MEMORY_SETTINGS.get("vitality_threshold", 1)
+        vitality_lookback = MEMORY_SETTINGS.get("vitality_lookback_days", 14)
+        is_vital, _ = check_lesson_vitality(trigger, vitality_threshold, vitality_lookback)
+        return is_vital
+    except ImportError:
+        return False
+
+
+def check_lesson_decay(lesson: dict, days_threshold: int, now: datetime) -> tuple:
+    """
+    Check if a single lesson should decay.
+
+    Args:
+        lesson: The memory/lesson dict
+        days_threshold: Days of inactivity before decay
+        now: Current datetime for age calculation
+
+    Returns:
+        (should_decay: bool, reason: str or None)
+    """
+    reinforced = lesson.get('reinforced', 0)
+
+    # High-value lessons always stay
+    if reinforced >= MEMORY_SETTINGS["reinforcement_threshold"]:
+        return (False, None)
+
+    last_used = lesson.get('last_used', '')
+    last_dt = parse_last_used_date(last_used)
+
+    if last_dt:
+        days_old = (now - last_dt).days
+
+        # Unreinforced and old enough to decay
+        if reinforced == 0 and days_old >= days_threshold:
+            return (True, f"Unreinforced for {days_old} days")
+        elif reinforced == 1 and days_old >= 7:
+            return (True, f"Single use, {days_old} days old")
+    elif reinforced == 0:
+        # No last_used date and never reinforced
+        return (True, "Never used, no date")
+
+    return (False, None)
+
+
 def identify_decayed_memory(state, days_threshold=None):
     """
     Identify memory items that should decay out.
@@ -370,15 +454,6 @@ def identify_decayed_memory(state, days_threshold=None):
     decayed = []
     now = datetime.now()
 
-    # Import proof vitality checker (lazy to avoid circular imports)
-    try:
-        from proof_utils import check_lesson_vitality
-        vitality_threshold = MEMORY_SETTINGS.get("vitality_threshold", 1)
-        vitality_lookback = MEMORY_SETTINGS.get("vitality_lookback_days", 14)
-        can_check_vitality = True
-    except ImportError:
-        can_check_vitality = False
-
     for m in memory:
         if not isinstance(m, dict):
             continue
@@ -388,42 +463,13 @@ def identify_decayed_memory(state, days_threshold=None):
             continue
 
         # Proof-grounded vitality check (v3.10.1)
-        # When observations (proof) and claims (YAML) conflict, observations win
-        trigger = m.get('trigger', '')
-        if can_check_vitality and trigger:
-            is_vital, _ = check_lesson_vitality(trigger, vitality_threshold, vitality_lookback)
-            if is_vital:
-                continue  # Protected by proof vitality
+        if is_lesson_vital(m.get('trigger', '')):
+            continue  # Protected by proof vitality
 
-        reinforced = m.get('reinforced', 0)
-
-        # High-value lessons always stay
-        if reinforced >= MEMORY_SETTINGS["reinforcement_threshold"]:
-            continue
-
-        last_used = m.get('last_used', '')
-        if last_used:
-            try:
-                # Parse date (could be just date or full datetime)
-                if 'T' in last_used:
-                    last_dt = datetime.fromisoformat(last_used.replace('Z', '+00:00'))
-                else:
-                    last_dt = datetime.strptime(last_used, '%Y-%m-%d')
-
-                days_old = (now - last_dt).days
-
-                # Unreinforced and old enough to decay
-                if reinforced == 0 and days_old >= days_threshold:
-                    decayed.append((m, f"Unreinforced for {days_old} days"))
-                elif reinforced == 1 and days_old >= 7:
-                    # Single reinforcement but getting stale
-                    decayed.append((m, f"Single use, {days_old} days old"))
-            except (ValueError, TypeError):
-                # Can't parse date, keep it for now
-                pass
-        elif reinforced == 0:
-            # No last_used date and never reinforced - candidate for decay
-            decayed.append((m, "Never used, no date"))
+        # Check if lesson should decay based on reinforcement and age
+        should_decay, reason = check_lesson_decay(m, days_threshold, now)
+        if should_decay:
+            decayed.append((m, reason))
 
     return decayed
 
