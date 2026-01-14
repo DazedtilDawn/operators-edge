@@ -35,6 +35,17 @@ from junction_utils import (
     set_pending_junction,
     clear_pending_junction,
 )
+from dispatch_utils import (
+    load_dispatch_state,
+    save_dispatch_state,
+    get_dispatch_status,
+    check_stuck,
+    check_iteration_limit,
+    increment_iteration,
+    reset_stuck_counter,
+    increment_stuck_counter,
+)
+from dispatch_config import DispatchState, DISPATCH_DEFAULTS
 
 
 def parse_edge_args(user_input: str) -> dict:
@@ -489,6 +500,35 @@ def handle_done_mode(state: dict) -> str:
         lines.append(f"Steps completed: {completed}/{len(plan)}")
         lines.append("")
 
+    # Generate scorecard if objective is complete
+    if plan and completed == len(plan):
+        try:
+            from scorecard_utils import (
+                compute_objective_scorecard,
+                format_scorecard,
+                get_recent_scorecards,
+                compute_governor_recommendation,
+                format_governor_recommendation
+            )
+
+            dispatch_state = load_dispatch_state()
+            scorecard = compute_objective_scorecard(
+                objective=objective,
+                dispatch_state=dispatch_state,
+                yaml_state=state
+            )
+            lines.append(format_scorecard(scorecard))
+            lines.append("")
+
+            # Show governor recommendation
+            recent = get_recent_scorecards(5)
+            if len(recent) >= 2:
+                recommendation = compute_governor_recommendation(recent)
+                lines.append(format_governor_recommendation(recommendation))
+                lines.append("")
+        except (ImportError, Exception):
+            pass  # Scorecard unavailable
+
     lines.extend([
         "-" * 70,
         "Archive options:",
@@ -508,6 +548,55 @@ def handle_active_mode(state: dict) -> str:
     """Handle /edge in ACTIVE mode - run gear engine."""
     project_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", "."))
 
+    # Check dispatch mode state
+    dispatch_state = load_dispatch_state()
+    dispatch_enabled = dispatch_state.get("enabled", False)
+    dispatch_running = dispatch_state.get("state") == DispatchState.RUNNING.value
+
+    # If dispatch is enabled, check safety limits
+    if dispatch_enabled and dispatch_running:
+        is_stuck, stuck_reason = check_stuck(dispatch_state)
+        if is_stuck:
+            dispatch_state["state"] = DispatchState.STUCK.value
+            save_dispatch_state(dispatch_state)
+            return "\n".join([
+                "=" * 70,
+                "DISPATCH MODE: STUCK",
+                "=" * 70,
+                "",
+                f"Reason: {stuck_reason}",
+                "",
+                "Options:",
+                "  /edge-adapt   - Try a new approach",
+                "  /edge-yolo off - Stop dispatch mode",
+                "",
+                "=" * 70,
+            ])
+
+        limit_reached, limit_reason = check_iteration_limit(dispatch_state)
+        if limit_reached:
+            dispatch_state["state"] = DispatchState.IDLE.value
+            dispatch_state["enabled"] = False
+            save_dispatch_state(dispatch_state)
+            return "\n".join([
+                "=" * 70,
+                "DISPATCH MODE: SAFETY LIMIT",
+                "=" * 70,
+                "",
+                f"Reason: {limit_reason}",
+                "",
+                f"Completed {dispatch_state.get('iteration', 0)} iterations.",
+                "Autopilot disengaged for safety.",
+                "",
+                "Run /edge-yolo on to restart.",
+                "",
+                "=" * 70,
+            ])
+
+        # Increment iteration counter
+        increment_iteration(dispatch_state)
+        save_dispatch_state(dispatch_state)
+
     # Run the gear engine
     result = run_gear_engine(state, project_dir)
 
@@ -516,14 +605,23 @@ def handle_active_mode(state: dict) -> str:
     gear_emoji = GEAR_EMOJI.get(result.gear_executed, "?")
     gear_name = result.gear_executed.value.upper()
 
-    lines = [
-        "=" * 70,
-        f"OPERATOR'S EDGE v4.0 - {mode_emoji} ACTIVE mode | {gear_emoji} {gear_name} gear",
-        "=" * 70,
-        "",
-        "[ACTIVE MODE] Execute plan steps - mark completed with proof",
-        "",
-    ]
+    # Add dispatch header if enabled
+    if dispatch_enabled:
+        lines = [
+            "=" * 70,
+            f"DISPATCH MODE [Iteration {dispatch_state.get('iteration', 0)}] | {gear_emoji} {gear_name} gear",
+            "=" * 70,
+            "",
+        ]
+    else:
+        lines = [
+            "=" * 70,
+            f"OPERATOR'S EDGE v4.0 - {mode_emoji} ACTIVE mode | {gear_emoji} {gear_name} gear",
+            "=" * 70,
+            "",
+            "[ACTIVE MODE] Execute plan steps - mark completed with proof",
+            "",
+        ]
 
     # Add the gear's display message
     lines.append(result.display_message)
@@ -541,6 +639,18 @@ def handle_active_mode(state: dict) -> str:
 
     # Handle junctions
     if result.junction_hit:
+        # Update dispatch state if in dispatch mode
+        if dispatch_enabled:
+            dispatch_state["state"] = DispatchState.JUNCTION.value
+            dispatch_state["junction"] = {
+                "type": result.junction_type,
+                "reason": result.junction_reason,
+            }
+            save_dispatch_state(dispatch_state)
+            # Reset progress counter on junction (not stuck)
+            reset_stuck_counter(dispatch_state)
+            save_dispatch_state(dispatch_state)
+
         lines.extend([
             "",
             "-" * 70,
@@ -577,6 +687,11 @@ def handle_active_mode(state: dict) -> str:
                 "=" * 70,
             ])
             return "\n".join(lines)
+    else:
+        # Success - reset stuck counter if in dispatch mode
+        if dispatch_enabled:
+            reset_stuck_counter(dispatch_state)
+            save_dispatch_state(dispatch_state)
 
     # Check for mode transition (ACTIVE → REVIEW when all steps complete)
     if not result.junction_hit:
@@ -605,12 +720,20 @@ def handle_active_mode(state: dict) -> str:
             except TimeoutError:
                 pass  # Non-fatal
 
-    # Add continuation hint
+    # Add continuation hint based on dispatch mode
     if result.continue_loop and not result.junction_hit:
-        lines.extend([
-            "",
-            "[Loop continues - run /edge again or /edge-yolo for autopilot]",
-        ])
+        if dispatch_enabled and dispatch_running:
+            lines.extend([
+                "",
+                "-" * 70,
+                "[DISPATCH] Loop continues. Run /edge to execute next action.",
+                "-" * 70,
+            ])
+        else:
+            lines.extend([
+                "",
+                "[Loop continues - run /edge again or /edge-yolo for autopilot]",
+            ])
 
     lines.extend(["", "=" * 70])
     return "\n".join(lines)

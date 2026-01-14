@@ -11,35 +11,26 @@ session:
 mode: "active"
 
 # What are we trying to achieve?
-objective: "Phase 2: State Consolidation - Single Canonical State"
+objective: "TAS v1.0: Trustworthy Autonomy Spec Implementation"
 
 # Current position in the plan
-current_step: 8
+current_step: 5
 
 # The plan - each step must have description, status, and proof
 # Status: pending | in_progress | completed | blocked
 plan:
-  - description: "Design consolidated schema - add runtime section to active_context.yaml"
+  - description: "Phase A: Make UI truthful - SessionStart uses dispatch_utils.get_dispatch_status()"
     status: "completed"
-    proof: "Added runtime section with junction/gear/dispatch subsections, helper functions get_runtime_section/update_runtime_section"
-  - description: "Migrate junction_utils.py to read/write from YAML runtime.junction"
+    proof: "session_start.py now imports from dispatch_utils, _output_dispatch_status() is canonical, tests updated (18 pass)"
+  - description: "Phase B: Make /edge-yolo mechanical - hook-driven loop using dispatch_utils"
     status: "completed"
-    proof: "USE_YAML_RUNTIME flag, _load_from_yaml_runtime, _save_to_yaml_runtime with JSON fallback"
-  - description: "Migrate gear_engine.py to read/write from YAML runtime.gear"
+    proof: "dispatch_hook.py created, settings.json updated with hook matcher, edge_skill_hook.py integrated (21 new tests pass)"
+  - description: "Phase C: Couple memory to execution - surface top 3 lessons at step, reinforce on success"
     status: "completed"
-    proof: "load_gear_state/save_gear_state now read/write YAML first with JSON fallback"
-  - description: "Migrate dispatch_utils.py to read/write from YAML runtime.dispatch"
+    proof: "Already implemented: gear_active.py:get_lessons_for_current_step(), pre_tool.py obligations, proof-grounded reinforcement"
+  - description: "Phase D: Outcome scorecard + governor - write scorecard on completion, self-tune"
     status: "completed"
-    proof: "load_dispatch_state/save_dispatch_state now read/write YAML first with JSON fallback"
-  - description: "Update all consumers (hooks, skills) to use YAML paths"
-    status: "completed"
-    proof: "Consumers use same API - no changes needed, verified via integration test"
-  - description: "Add migration logic for existing JSON state files"
-    status: "completed"
-    proof: "Built into load functions - reads JSON on fallback, migrates to YAML on first write"
-  - description: "Remove deprecated JSON state files and update tests"
-    status: "completed"
-    proof: "Updated test_junction_utils.py, test_dispatch_utils.py to mock load_yaml_state for JSON fallback tests - all 103 tests pass"
+    proof: "scorecard_utils.py created (15 tests pass), integrated into DONE mode and dispatch completion, governor recommends autonomy adjustments"
 
 # Completed work:
 # v5.0-phase2: State Consolidation - junction/gear/dispatch state now in active_context.yaml runtime section (7 steps, YAML-first with JSON fallback)
@@ -298,12 +289,20 @@ runtime:
     history: []
     junction:
       pending:
-        id: "2eec44ed-b888-4c6c-9a46-d8b9b4d8e434"
+        id: "054477c2-34b2-4f5a-bb15-4d389e7c2dfb"
         type: "finding_selection"
         payload:
           reason: "Select a finding to work on"
-          gear: "patrol"
-        created_at: "2026-01-13T19:56:42.016467"
+          gear:
+            current: "patrol"
+            entered_at: "2026-01-13T23:03:46.237545"
+            last_run_at: "2026-01-13T23:03:46.238987"
+            last_transition: "active_to_patrol"
+            iterations: 1
+            patrol_findings_count: 5
+            dream_proposals_count: 0
+            completion_epoch: null
+        created_at: "2026-01-13T20:21:20.322293"
         source: "edge"
       suppressions: []
       history_tail:

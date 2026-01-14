@@ -5,7 +5,7 @@ Tests for session_start.py - session initialization hook.
 Tests the core functions for:
 - Session ID generation
 - State clearing
-- YOLO state loading
+- Dispatch status output
 - Context output
 - Main initialization flow
 """
@@ -89,58 +89,6 @@ class TestClearOldState(unittest.TestCase):
             clear_old_state()  # Should not raise
 
 
-class TestLoadYoloState(unittest.TestCase):
-    """Tests for load_yolo_state() function."""
-
-    @patch('session_start.get_state_dir')
-    @patch('session_start.get_default_yolo_state')
-    def test_loads_existing_state(self, mock_default, mock_state_dir):
-        """load_yolo_state() should load from file if exists."""
-        from session_start import load_yolo_state
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mock_state_dir.return_value = Path(tmpdir)
-
-            # Create YOLO state file
-            yolo_file = Path(tmpdir) / "yolo_state.json"
-            yolo_file.write_text('{"enabled": true, "stats": {"auto_executed": 5}}')
-
-            result = load_yolo_state()
-
-            self.assertTrue(result["enabled"])
-            self.assertEqual(result["stats"]["auto_executed"], 5)
-
-    @patch('session_start.get_state_dir')
-    @patch('session_start.get_default_yolo_state')
-    def test_returns_default_if_missing(self, mock_default, mock_state_dir):
-        """load_yolo_state() should return default if file missing."""
-        from session_start import load_yolo_state
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mock_state_dir.return_value = Path(tmpdir)
-            mock_default.return_value = {"enabled": False}
-
-            result = load_yolo_state()
-
-            self.assertEqual(result, {"enabled": False})
-
-    @patch('session_start.get_state_dir')
-    @patch('session_start.get_default_yolo_state')
-    def test_returns_default_on_json_error(self, mock_default, mock_state_dir):
-        """load_yolo_state() should return default on JSON error."""
-        from session_start import load_yolo_state
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mock_state_dir.return_value = Path(tmpdir)
-            mock_default.return_value = {"enabled": False}
-
-            # Create invalid JSON file
-            yolo_file = Path(tmpdir) / "yolo_state.json"
-            yolo_file.write_text('invalid json')
-
-            result = load_yolo_state()
-
-            self.assertEqual(result, {"enabled": False})
 
 
 class TestOutputContext(unittest.TestCase):
@@ -154,10 +102,10 @@ class TestOutputContext(unittest.TestCase):
     @patch('session_start.check_state_entropy')
     @patch('session_start.load_archive')
     @patch('session_start.generate_reflection_summary')
-    @patch('session_start.load_yolo_state')
+    @patch('session_start.get_dispatch_status')
     @patch('session_start.detect_session_context')
     @patch('session_start.get_orchestrator_suggestion')
-    def test_outputs_objective(self, mock_suggest, mock_detect, mock_yolo,
+    def test_outputs_objective(self, mock_suggest, mock_detect, mock_dispatch,
                                mock_reflect, mock_archive, mock_entropy,
                                mock_mismatch, mock_memory, mock_schema,
                                mock_load, mock_project):
@@ -172,7 +120,7 @@ class TestOutputContext(unittest.TestCase):
         mock_entropy.return_value = (False, [])
         mock_archive.return_value = []
         mock_reflect.return_value = None
-        mock_yolo.return_value = {"enabled": False}
+        mock_dispatch.return_value = {"enabled": False}
         mock_detect.return_value = ("READY", {})
         mock_suggest.return_value = {}
 
@@ -190,10 +138,10 @@ class TestOutputContext(unittest.TestCase):
     @patch('session_start.check_state_entropy')
     @patch('session_start.load_archive')
     @patch('session_start.generate_reflection_summary')
-    @patch('session_start.load_yolo_state')
+    @patch('session_start.get_dispatch_status')
     @patch('session_start.detect_session_context')
     @patch('session_start.get_orchestrator_suggestion')
-    def test_outputs_plan_steps(self, mock_suggest, mock_detect, mock_yolo,
+    def test_outputs_plan_steps(self, mock_suggest, mock_detect, mock_dispatch,
                                  mock_reflect, mock_archive, mock_entropy,
                                  mock_mismatch, mock_memory, mock_schema,
                                  mock_load, mock_project):
@@ -215,7 +163,7 @@ class TestOutputContext(unittest.TestCase):
         mock_entropy.return_value = (False, [])
         mock_archive.return_value = []
         mock_reflect.return_value = None
-        mock_yolo.return_value = {"enabled": False}
+        mock_dispatch.return_value = {"enabled": False}
         mock_detect.return_value = ("READY", {})
         mock_suggest.return_value = {}
 
@@ -235,10 +183,10 @@ class TestOutputContext(unittest.TestCase):
     @patch('session_start.check_state_entropy')
     @patch('session_start.load_archive')
     @patch('session_start.generate_reflection_summary')
-    @patch('session_start.load_yolo_state')
+    @patch('session_start.get_dispatch_status')
     @patch('session_start.detect_session_context')
     @patch('session_start.get_orchestrator_suggestion')
-    def test_outputs_memory(self, mock_suggest, mock_detect, mock_yolo,
+    def test_outputs_memory(self, mock_suggest, mock_detect, mock_dispatch,
                             mock_reflect, mock_archive, mock_entropy,
                             mock_mismatch, mock_memory, mock_schema,
                             mock_load, mock_project):
@@ -255,7 +203,7 @@ class TestOutputContext(unittest.TestCase):
         mock_entropy.return_value = (False, [])
         mock_archive.return_value = []
         mock_reflect.return_value = None
-        mock_yolo.return_value = {"enabled": False}
+        mock_dispatch.return_value = {"enabled": False}
         mock_detect.return_value = ("READY", {})
         mock_suggest.return_value = {}
 
@@ -273,10 +221,10 @@ class TestOutputContext(unittest.TestCase):
     @patch('session_start.check_state_entropy')
     @patch('session_start.load_archive')
     @patch('session_start.generate_reflection_summary')
-    @patch('session_start.load_yolo_state')
+    @patch('session_start.get_dispatch_status')
     @patch('session_start.detect_session_context')
     @patch('session_start.get_orchestrator_suggestion')
-    def test_warns_about_mismatches(self, mock_suggest, mock_detect, mock_yolo,
+    def test_warns_about_mismatches(self, mock_suggest, mock_detect, mock_dispatch,
                                      mock_reflect, mock_archive, mock_entropy,
                                      mock_mismatch, mock_memory, mock_schema,
                                      mock_load, mock_project):
@@ -293,7 +241,7 @@ class TestOutputContext(unittest.TestCase):
         mock_entropy.return_value = (False, [])
         mock_archive.return_value = []
         mock_reflect.return_value = None
-        mock_yolo.return_value = {"enabled": False}
+        mock_dispatch.return_value = {"enabled": False}
         mock_detect.return_value = ("READY", {})
         mock_suggest.return_value = {}
 
@@ -312,10 +260,10 @@ class TestOutputContext(unittest.TestCase):
     @patch('session_start.check_state_entropy')
     @patch('session_start.load_archive')
     @patch('session_start.generate_reflection_summary')
-    @patch('session_start.load_yolo_state')
+    @patch('session_start.get_dispatch_status')
     @patch('session_start.detect_session_context')
     @patch('session_start.get_orchestrator_suggestion')
-    def test_warns_about_entropy(self, mock_suggest, mock_detect, mock_yolo,
+    def test_warns_about_entropy(self, mock_suggest, mock_detect, mock_dispatch,
                                   mock_reflect, mock_archive, mock_entropy,
                                   mock_mismatch, mock_memory, mock_schema,
                                   mock_load, mock_project):
@@ -330,7 +278,7 @@ class TestOutputContext(unittest.TestCase):
         mock_entropy.return_value = (True, ["Too many completed steps"])
         mock_archive.return_value = []
         mock_reflect.return_value = None
-        mock_yolo.return_value = {"enabled": False}
+        mock_dispatch.return_value = {"enabled": False}
         mock_detect.return_value = ("READY", {})
         mock_suggest.return_value = {}
 
@@ -349,14 +297,14 @@ class TestOutputContext(unittest.TestCase):
     @patch('session_start.check_state_entropy')
     @patch('session_start.load_archive')
     @patch('session_start.generate_reflection_summary')
-    @patch('session_start.load_yolo_state')
+    @patch('session_start.get_dispatch_status')
     @patch('session_start.detect_session_context')
     @patch('session_start.get_orchestrator_suggestion')
-    def test_shows_yolo_enabled(self, mock_suggest, mock_detect, mock_yolo,
+    def test_shows_dispatch_enabled(self, mock_suggest, mock_detect, mock_dispatch,
                                  mock_reflect, mock_archive, mock_entropy,
                                  mock_mismatch, mock_memory, mock_schema,
                                  mock_load, mock_project):
-        """output_context() should show YOLO mode when enabled."""
+        """output_context() should show Dispatch Mode when enabled."""
         from session_start import output_context
 
         mock_project.return_value = Path("/test")
@@ -367,10 +315,13 @@ class TestOutputContext(unittest.TestCase):
         mock_entropy.return_value = (False, [])
         mock_archive.return_value = []
         mock_reflect.return_value = None
-        mock_yolo.return_value = {
+        mock_dispatch.return_value = {
             "enabled": True,
-            "stats": {"auto_executed": 10, "blocked": 2},
-            "staged_actions": []
+            "state": "running",
+            "iteration": 10,
+            "junction": None,
+            "stats": {"junctions_hit": 2},
+            "stuck_count": 0
         }
         mock_detect.return_value = ("READY", {})
         mock_suggest.return_value = {}
@@ -379,8 +330,9 @@ class TestOutputContext(unittest.TestCase):
             output_context()
             output = mock_stdout.getvalue()
 
-        self.assertIn("YOLO MODE: ENABLED", output)
-        self.assertIn("Auto-executed: 10", output)
+        self.assertIn("DISPATCH MODE: RUNNING", output)
+        self.assertIn("Iterations: 10", output)
+        self.assertIn("Junctions: 2", output)
 
     @patch('session_start.get_project_dir')
     @patch('session_start.load_yaml_state')
@@ -406,10 +358,10 @@ class TestOutputContext(unittest.TestCase):
     @patch('session_start.check_state_entropy')
     @patch('session_start.load_archive')
     @patch('session_start.generate_reflection_summary')
-    @patch('session_start.load_yolo_state')
+    @patch('session_start.get_dispatch_status')
     @patch('session_start.detect_session_context')
     @patch('session_start.get_orchestrator_suggestion')
-    def test_shows_reflection(self, mock_suggest, mock_detect, mock_yolo,
+    def test_shows_reflection(self, mock_suggest, mock_detect, mock_dispatch,
                                mock_reflect, mock_archive, mock_entropy,
                                mock_mismatch, mock_memory, mock_schema,
                                mock_load, mock_project):
@@ -424,7 +376,7 @@ class TestOutputContext(unittest.TestCase):
         mock_entropy.return_value = (False, [])
         mock_archive.return_value = [{"type": "completed_objective"}]
         mock_reflect.return_value = "Sessions scored: 5\nAverage: 4.5/6"
-        mock_yolo.return_value = {"enabled": False}
+        mock_dispatch.return_value = {"enabled": False}
         mock_detect.return_value = ("READY", {})
         mock_suggest.return_value = {}
 

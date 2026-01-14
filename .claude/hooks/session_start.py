@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Operator's Edge v2.6 - Session Start Hook
+Operator's Edge v3.0 - Session Start Hook
 Initializes session state and captures baseline for verification.
 
 Actions:
@@ -10,7 +10,7 @@ Actions:
 4. Surfaces relevant memory (v2)
 5. Warns about entropy issues (v2)
 6. Shows unresolved mismatches (v2)
-7. Shows YOLO mode status (v2.6)
+7. Shows Dispatch Mode status (v3.0 - canonical from dispatch_utils)
 """
 import json
 import os
@@ -35,10 +35,10 @@ from edge_utils import (
     get_orchestrator_suggestion,
     load_archive,
     generate_reflection_summary,
-    get_default_yolo_state
 )
 from proof_utils import initialize_proof_session, archive_old_sessions
 from archive_utils import cleanup_archive
+from dispatch_utils import get_dispatch_status
 
 def generate_session_id():
     """Generate a unique session ID."""
@@ -52,17 +52,6 @@ def clear_old_state():
         failure_log.unlink()
 
 
-def load_yolo_state():
-    """Load YOLO mode state from file."""
-    state_dir = get_state_dir()
-    yolo_file = state_dir / "yolo_state.json"
-    if yolo_file.exists():
-        try:
-            with open(yolo_file, 'r') as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError):
-            pass
-    return get_default_yolo_state()
 
 def _output_plan(state):
     """Output the plan section."""
@@ -163,17 +152,27 @@ def _sync_clickup(state):
         return None  # ClickUp integration not available
 
 
-def _output_yolo_status(state, yolo_state):
-    """Output YOLO mode status."""
-    if yolo_state.get("enabled"):
-        stats = yolo_state.get("stats", {})
-        staged = len(yolo_state.get("staged_actions", []))
-        auto = stats.get("auto_executed", 0)
-        blocked = stats.get("blocked", 0)
-        print(f"\n🚀 YOLO MODE: ENABLED")
-        print(f"  Auto-executed: {auto} | Staged: {staged} | Blocked: {blocked}")
-        if staged > 0:
-            print(f"  ⚠️  {staged} actions staged - run /edge-yolo to review")
+def _output_dispatch_status(state):
+    """Output Dispatch Mode status (canonical source: dispatch_utils)."""
+    dispatch = get_dispatch_status()
+
+    if dispatch.get("enabled"):
+        stats = dispatch.get("stats", {})
+        iteration = dispatch.get("iteration", 0)
+        junction = dispatch.get("junction")
+        dispatch_state = dispatch.get("state", "stopped")
+
+        print(f"\n🚀 DISPATCH MODE: {dispatch_state.upper()}")
+        print(f"  Iterations: {iteration} | Junctions: {stats.get('junctions_hit', 0)}")
+
+        if junction:
+            junction_type = junction.get("type", "unknown") if isinstance(junction, dict) else "pending"
+            print(f"  ⚠️  Junction pending: {junction_type}")
+            print(f"      Run /edge-yolo approve|skip|dismiss to continue")
+
+        if dispatch.get("stuck_count", 0) > 0:
+            print(f"  ⚠️  Stuck count: {dispatch.get('stuck_count')} - may need adaptation")
+
         print(f"  Tip: /edge-yolo off to disable")
     elif state.get("objective") and state.get("plan"):
         print(f"\n💡 Tip: Run /edge-yolo on for autonomous mode")
@@ -205,7 +204,7 @@ def output_context():
         _output_warnings(state)
         _output_reflection()
         _sync_clickup(state)
-        _output_yolo_status(state, load_yolo_state())
+        _output_dispatch_status(state)
         _output_suggestion(state)
     else:
         print("\nWARNING: active_context.yaml missing or invalid!")

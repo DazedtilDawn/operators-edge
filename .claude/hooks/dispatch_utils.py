@@ -344,12 +344,25 @@ def resume_from_junction(dispatch_state: dict) -> None:
     save_dispatch_state(dispatch_state)
 
 
-def mark_complete(dispatch_state: dict) -> None:
-    """Mark dispatch as complete (objective achieved)."""
+def mark_complete(dispatch_state: dict, quality_passed: bool = True, quality_reason: str = "") -> Dict[str, Any]:
+    """
+    Mark dispatch as complete (objective achieved).
+    Computes and persists outcome scorecard.
+
+    Returns the scorecard.
+    """
+    try:
+        from scorecard_utils import on_objective_complete
+        scorecard = on_objective_complete(dispatch_state, quality_passed, quality_reason)
+    except (ImportError, Exception):
+        scorecard = None
+
     dispatch_state["enabled"] = False
     dispatch_state["state"] = DispatchState.COMPLETE.value
     record_action(dispatch_state, "complete", "Objective achieved")
     save_dispatch_state(dispatch_state)
+
+    return scorecard or {}
 
 
 def mark_stuck(dispatch_state: dict, reason: str) -> None:
