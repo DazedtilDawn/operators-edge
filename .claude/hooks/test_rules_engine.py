@@ -278,5 +278,262 @@ class TestLessonGraduation(unittest.TestCase):
         self.assertEqual(candidates[0]["trigger"], "high")
 
 
+# =============================================================================
+# v7.1 GRADUATION PIPELINE TESTS
+# =============================================================================
+
+class TestRuleShadowMode(unittest.TestCase):
+    """Test shadow mode tracking for graduated rules."""
+
+    def test_new_rule_starts_in_shadow_mode(self):
+        """New rules should start with shadow_mode=True."""
+        rule = Rule(
+            id="test",
+            trigger_pattern=r"\.py$",
+            check_fn="check",
+            message="Test"
+        )
+        self.assertTrue(rule.shadow_mode)
+        self.assertEqual(rule.fire_count, 0)
+
+    def test_rule_from_dict_preserves_shadow_mode(self):
+        """Rule.from_dict should preserve shadow mode fields."""
+        data = {
+            "id": "test",
+            "trigger_pattern": r"\.py$",
+            "check_fn": "check",
+            "message": "Test",
+            "shadow_mode": False,
+            "fire_count": 15,
+            "promoted_at": "2026-01-01T00:00:00",
+        }
+        rule = Rule.from_dict(data)
+        self.assertFalse(rule.shadow_mode)
+        self.assertEqual(rule.fire_count, 15)
+        self.assertEqual(rule.promoted_at, "2026-01-01T00:00:00")
+
+    def test_is_ready_for_promotion_requires_min_fires(self):
+        """Rule needs minimum fires before promotion check."""
+        from rules_engine import SHADOW_MODE_MIN_FIRES
+        rule = Rule(
+            id="test",
+            trigger_pattern=r"\.py$",
+            check_fn="check",
+            message="Test",
+            shadow_mode=True,
+            fire_count=SHADOW_MODE_MIN_FIRES - 1,
+            promoted_at="2020-01-01T00:00:00",  # Old enough
+        )
+        self.assertFalse(rule.is_ready_for_promotion())
+
+        rule.fire_count = SHADOW_MODE_MIN_FIRES
+        self.assertTrue(rule.is_ready_for_promotion())
+
+    def test_promoted_rule_not_ready_for_promotion(self):
+        """Already promoted rules return False for is_ready_for_promotion."""
+        rule = Rule(
+            id="test",
+            trigger_pattern=r"\.py$",
+            check_fn="check",
+            message="Test",
+            shadow_mode=False,  # Already promoted
+            fire_count=100,
+        )
+        self.assertFalse(rule.is_ready_for_promotion())
+
+
+class TestRulesFilePersistence(unittest.TestCase):
+    """Test rules.json file operations."""
+
+    def setUp(self):
+        import tempfile
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_save_and_load_rules(self):
+        """Can save and load rules from JSON."""
+        from rules_engine import save_rules_to_file, load_rules_from_file
+        from pathlib import Path
+
+        rules = [
+            Rule(
+                id="test-rule-1",
+                trigger_pattern=r"\.py$",
+                check_fn="check_python_shebang",
+                message="Test rule 1",
+            ),
+            Rule(
+                id="test-rule-2",
+                trigger_pattern=r"\.md$",
+                check_fn="check_policy",
+                message="Test rule 2",
+                shadow_mode=False,
+            ),
+        ]
+
+        project_dir = Path(self.temp_dir)
+        self.assertTrue(save_rules_to_file(rules, project_dir))
+
+        loaded = load_rules_from_file(project_dir)
+        self.assertEqual(len(loaded), 2)
+        self.assertEqual(loaded[0].id, "test-rule-1")
+        self.assertTrue(loaded[0].shadow_mode)
+        self.assertEqual(loaded[1].id, "test-rule-2")
+        self.assertFalse(loaded[1].shadow_mode)
+
+    def test_add_rule_to_file(self):
+        """Can add a single rule to JSON."""
+        from rules_engine import add_rule_to_file, load_rules_from_file
+        from pathlib import Path
+
+        project_dir = Path(self.temp_dir)
+
+        rule = Rule(
+            id="new-rule",
+            trigger_pattern=r"\.js$",
+            check_fn="check_js",
+            message="JS rule",
+        )
+
+        self.assertTrue(add_rule_to_file(rule, project_dir))
+
+        loaded = load_rules_from_file(project_dir)
+        self.assertEqual(len(loaded), 1)
+        self.assertEqual(loaded[0].id, "new-rule")
+
+    def test_add_duplicate_rule_fails(self):
+        """Adding duplicate rule ID fails."""
+        from rules_engine import add_rule_to_file
+        from pathlib import Path
+
+        project_dir = Path(self.temp_dir)
+
+        rule = Rule(id="dup", trigger_pattern=".*", check_fn="c", message="m")
+
+        self.assertTrue(add_rule_to_file(rule, project_dir))
+        self.assertFalse(add_rule_to_file(rule, project_dir))  # Duplicate
+
+    def test_remove_rule_from_file(self):
+        """Can remove a rule from JSON."""
+        from rules_engine import save_rules_to_file, remove_rule_from_file, load_rules_from_file
+        from pathlib import Path
+
+        project_dir = Path(self.temp_dir)
+
+        rules = [
+            Rule(id="keep", trigger_pattern=".*", check_fn="c", message="keep"),
+            Rule(id="remove", trigger_pattern=".*", check_fn="c", message="remove"),
+        ]
+        save_rules_to_file(rules, project_dir)
+
+        self.assertTrue(remove_rule_from_file("remove", project_dir))
+
+        loaded = load_rules_from_file(project_dir)
+        self.assertEqual(len(loaded), 1)
+        self.assertEqual(loaded[0].id, "keep")
+
+
+class TestGraduationFunctions(unittest.TestCase):
+    """Test lesson graduation functions."""
+
+    def test_generate_rule_id(self):
+        """Rule ID generated from lesson trigger."""
+        from rules_engine import generate_rule_id
+
+        lesson = {"trigger": "react hooks", "lesson": "Use useCallback"}
+        rule_id = generate_rule_id(lesson)
+        self.assertEqual(rule_id, "graduated-react-hooks")
+
+    def test_generate_rule_id_sanitizes(self):
+        """Rule ID is sanitized for special characters."""
+        from rules_engine import generate_rule_id
+
+        lesson = {"trigger": "C++ templates & generics", "lesson": "Use templates"}
+        rule_id = generate_rule_id(lesson)
+        self.assertEqual(rule_id, "graduated-c-templates-generics")
+
+    def test_generate_trigger_pattern_python(self):
+        """Trigger pattern inferred for Python lessons."""
+        from rules_engine import generate_trigger_pattern
+
+        lesson = {"trigger": "python shebang", "lesson": "Use python3"}
+        pattern = generate_trigger_pattern(lesson)
+        self.assertEqual(pattern, r"\.py$")
+
+    def test_generate_trigger_pattern_react(self):
+        """Trigger pattern inferred for React lessons."""
+        from rules_engine import generate_trigger_pattern
+
+        lesson = {"trigger": "react components", "lesson": "Use hooks"}
+        pattern = generate_trigger_pattern(lesson)
+        self.assertEqual(pattern, r"\.(jsx|tsx)$")
+
+    def test_generate_trigger_pattern_default(self):
+        """Default pattern matches all files."""
+        from rules_engine import generate_trigger_pattern
+
+        lesson = {"trigger": "general advice", "lesson": "Be careful"}
+        pattern = generate_trigger_pattern(lesson)
+        self.assertEqual(pattern, r".*")
+
+    def test_graduate_lesson_to_rule(self):
+        """Can graduate a lesson to a shadow mode rule."""
+        from rules_engine import graduate_lesson_to_rule, load_rules_from_file
+        from pathlib import Path
+        import tempfile
+        import shutil
+
+        temp_dir = tempfile.mkdtemp()
+        try:
+            project_dir = Path(temp_dir)
+
+            lesson = {
+                "trigger": "test trigger",
+                "lesson": "Test lesson text",
+                "reinforced": 15,
+            }
+
+            rule = graduate_lesson_to_rule(lesson, project_dir)
+
+            self.assertIsNotNone(rule)
+            self.assertEqual(rule.id, "graduated-test-trigger")
+            self.assertEqual(rule.message, "Test lesson text")
+            self.assertTrue(rule.shadow_mode)
+            self.assertEqual(rule.fire_count, 0)
+
+            # Verify persisted
+            loaded = load_rules_from_file(project_dir)
+            self.assertEqual(len(loaded), 1)
+            self.assertEqual(loaded[0].id, "graduated-test-trigger")
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_format_graduation_candidates(self):
+        """Candidates are formatted for display."""
+        from rules_engine import format_graduation_candidates
+
+        candidates = [
+            {"trigger": "hooks", "lesson": "Use hooks properly in React components for state", "reinforced": 12},
+            {"trigger": "async", "lesson": "Always await async operations", "reinforced": 10},
+        ]
+
+        output = format_graduation_candidates(candidates)
+
+        self.assertIn("Graduation Candidates", output)
+        self.assertIn("[hooks]", output)
+        self.assertIn("12 times", output)
+        self.assertIn("[async]", output)
+
+    def test_format_no_candidates(self):
+        """Empty candidates list handled."""
+        from rules_engine import format_graduation_candidates
+
+        output = format_graduation_candidates([])
+        self.assertIn("No lessons ready", output)
+
+
 if __name__ == "__main__":
     unittest.main()
