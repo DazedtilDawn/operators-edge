@@ -385,7 +385,7 @@ class TestDispatchFlowFunctions(unittest.TestCase):
     @patch('dispatch_utils.set_pending_junction')
     @patch('dispatch_utils.save_dispatch_state')
     def test_pause_at_junction(self, mock_save, mock_set_pending):
-        """pause_at_junction() should set junction state."""
+        """pause_at_junction() should set junction state and write to junction_state.json."""
         from dispatch_utils import pause_at_junction
 
         state = {"stats": {}}
@@ -393,23 +393,25 @@ class TestDispatchFlowFunctions(unittest.TestCase):
         mock_set_pending.return_value = ({"id": "test-junction"}, None)
         pause_at_junction(state, JunctionType.IRREVERSIBLE, "Push detected")
 
+        # v5.1: State transitions to JUNCTION, but junction data is only in junction_state.json
         self.assertEqual(state["state"], DispatchState.JUNCTION.value)
-        self.assertIsNotNone(state["junction"])
-        self.assertEqual(state["junction"]["type"], JunctionType.IRREVERSIBLE.value)
+        # v5.1: Verify set_pending_junction was called (junction is in junction_state.json)
+        mock_set_pending.assert_called_once()
 
     @patch('dispatch_utils.clear_pending_junction')
     @patch('dispatch_utils.save_dispatch_state')
     def test_resume_from_junction(self, mock_save, mock_clear):
-        """resume_from_junction() should clear junction."""
+        """resume_from_junction() should clear junction and set running state."""
         from dispatch_utils import resume_from_junction
 
-        state = {"junction": {"type": "test"}}
+        # v5.1: Junction is only in junction_state.json, not dispatch_state
+        state = {"state": DispatchState.JUNCTION.value}
         # Return tuple (cleared, warning) - new signature
         mock_clear.return_value = ({"type": "test"}, None)
         resume_from_junction(state)
 
+        # v5.1: Only check state transition, junction is cleared via junction_state.json
         self.assertEqual(state["state"], DispatchState.RUNNING.value)
-        self.assertIsNone(state["junction"])
 
     @patch('dispatch_utils.save_dispatch_state')
     def test_mark_complete(self, mock_save):

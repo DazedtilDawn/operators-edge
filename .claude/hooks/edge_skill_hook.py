@@ -25,6 +25,7 @@ from gear_engine import (
 from gear_config import (
     Gear,
     GearTransition,
+    QualityGateOverride,
     detect_current_gear,
     format_gear_status,
     GEAR_EMOJI,
@@ -46,6 +47,10 @@ from dispatch_utils import (
     increment_stuck_counter,
 )
 from dispatch_config import DispatchState, DISPATCH_DEFAULTS
+from eval_utils import cleanup_orphaned_eval_state, cleanup_old_snapshots
+from obligation_utils import clear_stale_obligations
+from proof_utils import get_current_session_id
+from datetime import datetime
 
 
 def parse_edge_args(user_input: str) -> dict:
@@ -158,13 +163,62 @@ def handle_stop() -> str:
     return "\n".join(lines)
 
 
-def handle_approve() -> tuple[str, bool]:
-    """Handle /edge approve - clear junction and continue."""
-    # Check if this is a mode_transition junction
+def _parse_check_specifier(specifier: str, failed_checks: list) -> list:
+    """
+    Parse user's check specifier into list of check names (v5.2).
+
+    Supports:
+    - Numeric indices (1-based): "1", "2", "1,2"
+    - Check names: "steps_have_proof", "no_dangling_in_progress"
+    - Mixed: "1,no_dangling_in_progress"
+
+    Args:
+        specifier: User input (e.g., "1,2" or "steps_have_proof")
+        failed_checks: List of failed check dicts with "name" field
+
+    Returns:
+        List of check names to approve
+    """
+    if not specifier:
+        return []
+
+    parts = [p.strip() for p in specifier.split(",")]
+    check_names = []
+
+    for part in parts:
+        if part.isdigit():
+            # Numeric index (1-based)
+            idx = int(part) - 1
+            if 0 <= idx < len(failed_checks):
+                name = failed_checks[idx].get("name", "")
+                if name:
+                    check_names.append(name)
+        else:
+            # Check name directly
+            check_names.append(part)
+
+    return [n for n in check_names if n]
+
+
+def handle_approve(args: str = "") -> tuple[str, bool]:
+    """
+    Handle /edge approve [check_specifier] - clear junction and continue.
+
+    Args:
+        args: Optional check specifier for quality gate (v5.2)
+              - Empty: Full override (bypass all checks)
+              - "1" or "1,2": Approve specific checks by number
+              - "check_name": Approve specific check by name
+    """
+    # Check junction type before clearing
     pending_junction = get_pending_junction()
     is_mode_transition = (
         pending_junction and
         pending_junction.get("type") == "mode_transition"
+    )
+    is_quality_gate = (
+        pending_junction and
+        pending_junction.get("type") == "quality_gate"
     )
 
     try:
@@ -175,6 +229,52 @@ def handle_approve() -> tuple[str, bool]:
         return (f"[WARNING] {warning}", False)
 
     if pending:
+        # If quality_gate, persist session-scoped override (v5.2)
+        if is_quality_gate:
+            try:
+                state = load_yaml_state()
+                gear_state = load_gear_state()
+                objective = state.get("objective", "") if state else ""
+
+                # Get failed checks from junction payload
+                payload = pending_junction.get("payload", {})
+                failed_checks = payload.get("failed_checks", [])
+
+                # Parse check specifier (v5.2)
+                check_specifier = args.strip() if args else ""
+
+                if check_specifier:
+                    # Check-specific override
+                    approved_checks = _parse_check_specifier(check_specifier, failed_checks)
+                    if not approved_checks:
+                        return (f"[ERROR] Invalid check specifier: '{check_specifier}'. Use numbers (1,2) or check names.", False)
+                    mode = "check_specific"
+                    message = f"Approved {len(approved_checks)} check(s): {', '.join(approved_checks)}"
+                else:
+                    # Full override (v5.1 behavior)
+                    approved_checks = []
+                    mode = "full"
+                    message = "All quality gate checks approved"
+
+                # Set session-scoped quality gate override
+                gear_state.quality_gate_override = QualityGateOverride(
+                    mode=mode,
+                    approved_at=datetime.now().isoformat(),
+                    session_id=get_current_session_id(),
+                    objective_hash=hash(objective),
+                    approved_checks=approved_checks,
+                    reason=payload.get("reason", "user_approved"),
+                )
+                save_gear_state(gear_state)
+
+                if mode == "full":
+                    return (f"[OVERRIDE SET] {message}. Gate will be bypassed on subsequent runs.", True)
+                else:
+                    return (f"[OVERRIDE SET] {message}. Only these checks will be bypassed.", True)
+            except Exception as e:
+                # Override failed, but junction is cleared - continue anyway
+                return (f"[APPROVED] Quality gate cleared (override failed: {e}). Continuing...", True)
+
         # If it was a mode_transition, perform the mode switch
         if is_mode_transition:
             payload = pending_junction.get("payload", {})
@@ -764,6 +864,15 @@ def handle_run(args: str = "") -> str:
 
 def main():
     """Main entry point - processes /edge command from user input."""
+    # Session-start cleanup (idempotent - safe to run every invocation)
+    # Clears orphaned state from previous crashed sessions
+    try:
+        cleanup_orphaned_eval_state(max_age_minutes=60)
+        cleanup_old_snapshots(retention_days=7, dry_run=False)
+        clear_stale_obligations(max_age_hours=24)
+    except Exception:
+        pass  # Cleanup failure shouldn't block /edge execution
+
     # Get user input from stdin (Claude Code passes it via hook)
     user_input = ""
     if not sys.stdin.isatty():
@@ -789,7 +898,7 @@ def main():
     elif command in ("off", "stop"):
         print(handle_stop())
     elif command == "approve":
-        message, should_run = handle_approve()
+        message, should_run = handle_approve(args)
         print(message)
         if should_run:
             # Also run a gear cycle after approving

@@ -773,6 +773,65 @@ def _get_run_age_days(run_dir: Path) -> int:
         return 999
 
 
+def cleanup_orphaned_eval_state(max_age_minutes: int = 60) -> bool:
+    """
+    Clear stale pending_run from previous crashed sessions.
+
+    A pending_run is created in pre_tool.py before eval execution.
+    If post_tool.py never runs (crash, timeout), it lingers forever.
+    This function clears pending_runs older than max_age_minutes.
+
+    Args:
+        max_age_minutes: Maximum age before considering pending_run stale (default 60)
+
+    Returns:
+        True if a stale pending_run was cleared, False otherwise
+    """
+    eval_state = load_eval_state()
+    pending_run = eval_state.get("pending_run")
+
+    if not pending_run:
+        return False
+
+    started_at = pending_run.get("started_at")
+    if not started_at:
+        # No timestamp - consider it stale
+        eval_state["pending_run"] = None
+        save_eval_state(eval_state)
+        return True
+
+    try:
+        started = datetime.fromisoformat(started_at)
+        age_minutes = (datetime.now() - started).total_seconds() / 60
+
+        if age_minutes > max_age_minutes:
+            # Stale - clear it and log
+            eval_state["pending_run"] = None
+            save_eval_state(eval_state)
+
+            # Try to log to proof (optional - don't fail if proof logging unavailable)
+            try:
+                from proof_utils import log_to_session
+                log_to_session({
+                    "type": "cleanup_orphaned_eval",
+                    "stale_run": pending_run,
+                    "age_minutes": round(age_minutes, 2),
+                    "message": "Cleared orphaned eval run from previous session",
+                    "timestamp": datetime.now().isoformat(),
+                })
+            except Exception:
+                pass  # Proof logging is optional
+
+            return True
+    except (ValueError, TypeError):
+        # Can't parse timestamp - clear it
+        eval_state["pending_run"] = None
+        save_eval_state(eval_state)
+        return True
+
+    return False
+
+
 def cleanup_old_snapshots(
     retention_days: int = DEFAULT_RETENTION_DAYS,
     failure_retention_days: int = FAILURE_RETENTION_DAYS,

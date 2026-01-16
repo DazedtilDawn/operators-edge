@@ -12,7 +12,7 @@ Transitions happen automatically based on state conditions.
 """
 
 from enum import Enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
@@ -216,6 +216,47 @@ def get_valid_transitions(from_gear: Gear) -> List[TransitionRule]:
 # =============================================================================
 
 @dataclass
+class QualityGateOverride:
+    """
+    Granular quality gate override (v5.2).
+
+    Supports two modes:
+    - "full": Bypass entire quality gate (v5.1 behavior)
+    - "check_specific": Only bypass specified checks
+    """
+    mode: str  # "full" | "check_specific"
+    approved_at: str
+    session_id: str
+    objective_hash: int
+    approved_checks: List[str] = field(default_factory=list)
+    reason: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "mode": self.mode,
+            "approved_at": self.approved_at,
+            "session_id": self.session_id,
+            "objective_hash": self.objective_hash,
+            "approved_checks": self.approved_checks,
+            "reason": self.reason,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "QualityGateOverride":
+        """Create from dict, with backward compatibility for v5.1 format."""
+        if data is None:
+            return None
+        return cls(
+            mode=data.get("mode", "full"),  # Default to full for v5.1 compatibility
+            approved_at=data.get("approved_at", ""),
+            session_id=data.get("session_id", ""),
+            objective_hash=data.get("objective_hash", 0),
+            approved_checks=data.get("approved_checks", []),
+            reason=data.get("reason", ""),
+        )
+
+
+@dataclass
 class GearState:
     """Current gear state with metadata."""
     current_gear: Gear
@@ -226,6 +267,9 @@ class GearState:
     dream_proposals_count: int
     last_run_at: Optional[str] = None  # ISO timestamp
     completion_epoch: Optional[str] = None
+    # v5.2: Session-scoped quality gate override (bypasses gate after /edge approve)
+    # Supports full override or check-specific override
+    quality_gate_override: Optional[QualityGateOverride] = None
 
     def to_dict(self) -> dict:
         return {
@@ -237,10 +281,18 @@ class GearState:
             "patrol_findings_count": self.patrol_findings_count,
             "dream_proposals_count": self.dream_proposals_count,
             "completion_epoch": self.completion_epoch,
+            "quality_gate_override": (
+                self.quality_gate_override.to_dict()
+                if self.quality_gate_override else None
+            ),
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "GearState":
+        # Deserialize QualityGateOverride if present
+        override_data = data.get("quality_gate_override")
+        override = QualityGateOverride.from_dict(override_data) if override_data else None
+
         return cls(
             current_gear=Gear(data.get("current_gear", "active")),
             entered_at=data.get("entered_at", datetime.now().isoformat()),
@@ -250,6 +302,7 @@ class GearState:
             patrol_findings_count=data.get("patrol_findings_count", 0),
             dream_proposals_count=data.get("dream_proposals_count", 0),
             completion_epoch=data.get("completion_epoch"),
+            quality_gate_override=override,
         )
 
 

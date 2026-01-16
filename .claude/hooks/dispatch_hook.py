@@ -25,6 +25,9 @@ from dispatch_utils import (
     check_stuck,
     check_iteration_limit,
     determine_next_action,
+    increment_stuck_counter,
+    mark_stuck,
+    reset_stuck_counter,
 )
 from dispatch_config import DispatchState, JunctionType, DISPATCH_DEFAULTS
 from junction_utils import get_pending_junction, clear_pending_junction
@@ -84,12 +87,32 @@ def format_dispatch_status() -> str:
         total = status.get("plan_steps", 0)
         lines.append(f"Progress: [{completed}/{total}] steps completed")
 
+    stuck_count = status.get("stuck_count", 0)
     lines.extend([
         "",
         f"Stats this session:",
         f"  - Iterations: {status.get('iteration', 0)}",
         f"  - Junctions hit: {status.get('stats', {}).get('junctions_hit', 0)}",
+        f"  - Stuck count: {stuck_count}",
     ])
+
+    # v5.1: Check for STUCK state (mechanical enforcement)
+    dispatch_state = load_dispatch_state()
+    is_stuck, stuck_reason = check_stuck(dispatch_state)
+    if is_stuck:
+        lines.extend([
+            "",
+            "-" * 70,
+            "!!! STUCK DETECTED !!!",
+            "-" * 70,
+            stuck_reason,
+            "",
+            "Options:",
+            "  1. Adapt the plan (change approach, not retry same thing)",
+            "  2. /edge-yolo off - Stop and reconsider manually",
+            "  3. Clear stuck counter: requires manual intervention",
+            "",
+        ])
 
     # Show junction if pending
     junction = status.get("junction")
@@ -196,6 +219,8 @@ def handle_approve() -> tuple[str, bool]:
     if not pending:
         return ("[APPROVE] No pending junction. Run /edge to continue.", True)
 
+    junction_type = pending.get("type", "unknown")
+
     try:
         cleared, warning = clear_pending_junction("approve")
     except TimeoutError as exc:
@@ -204,11 +229,42 @@ def handle_approve() -> tuple[str, bool]:
     if warning:
         return (f"[WARNING] {warning}", False)
 
-    # Also update dispatch state
+    # v5.1: Update dispatch state and track STUCK detection
     dispatch = load_dispatch_state()
     if dispatch.get("state") == DispatchState.JUNCTION.value:
         dispatch["state"] = DispatchState.RUNNING.value
-        dispatch["junction"] = None
+        # v5.1: Removed dispatch["junction"] = None - junction_state.json is sole source
+
+        # v5.1: STUCK detection - track repeated same-type junctions
+        last_junction_type = dispatch.get("last_junction_type")
+        if last_junction_type == junction_type:
+            # Same junction type repeated - increment stuck counter
+            count = increment_stuck_counter(dispatch)
+            is_stuck, stuck_reason = check_stuck(dispatch)
+            if is_stuck:
+                # Mark as STUCK state
+                mark_stuck(dispatch, stuck_reason)
+                save_dispatch_state(dispatch)
+                return ("\n".join([
+                    "=" * 70,
+                    "!!! STUCK - SAME JUNCTION REPEATED !!!",
+                    "=" * 70,
+                    "",
+                    stuck_reason,
+                    "",
+                    "Dispatch is STUCK. You must adapt your approach:",
+                    "  1. Change the plan (different approach, not same action)",
+                    "  2. /edge-yolo off - Stop and reconsider manually",
+                    "",
+                    "Retrying the same action will not help.",
+                    "",
+                    "=" * 70,
+                ]), False)
+        else:
+            # Different junction type - reset stuck counter (progress made)
+            reset_stuck_counter(dispatch)
+
+        dispatch["last_junction_type"] = junction_type
         save_dispatch_state(dispatch)
 
     lines = [
@@ -238,11 +294,11 @@ def handle_skip() -> tuple[str, bool]:
     if warning:
         return (f"[WARNING] {warning}", False)
 
-    # Update dispatch state
+    # v5.1: Update dispatch state (junction cleared via junction_state.json)
     dispatch = load_dispatch_state()
     if dispatch.get("state") == DispatchState.JUNCTION.value:
         dispatch["state"] = DispatchState.RUNNING.value
-        dispatch["junction"] = None
+        # v5.1: Removed dispatch["junction"] = None - junction_state.json is sole source
         save_dispatch_state(dispatch)
 
     lines = [
@@ -283,11 +339,11 @@ def handle_dismiss(args: str = "") -> tuple[str, bool]:
     if warning:
         return (f"[WARNING] {warning}", False)
 
-    # Update dispatch state
+    # v5.1: Update dispatch state (junction cleared via junction_state.json)
     dispatch = load_dispatch_state()
     if dispatch.get("state") == DispatchState.JUNCTION.value:
         dispatch["state"] = DispatchState.RUNNING.value
-        dispatch["junction"] = None
+        # v5.1: Removed dispatch["junction"] = None - junction_state.json is sole source
         save_dispatch_state(dispatch)
 
     ttl_display = ttl_minutes if ttl_minutes else 60
