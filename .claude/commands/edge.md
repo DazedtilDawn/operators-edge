@@ -1,349 +1,291 @@
 ---
-description: Smart orchestrator - figures out what you need based on context
+description: Smart orchestrator - one command to rule them all (v6.0)
 allowed-tools: Read, Edit, Write, Bash, Glob, Grep, Skill
 ---
 
-# Operator's Edge - Smart Orchestrator (v3.9)
+# Operator's Edge - Unified Command (v6.0)
 
-One command to rule them all. Now with Three Gears.
+**One command. The system figures out the rest.**
+
+## The Contract
+
+```
+/edge                    → Do the right thing based on context
+/edge "objective text"   → Start new objective (triggers planning)
+/edge approve            → Approve pending junction
+/edge approve 1,2        → Approve specific quality checks
+/edge skip               → Skip pending junction
+/edge dismiss            → Dismiss pending junction
+/edge status             → Show status without acting
+/edge stop               → Stop autonomous mode
+/edge --plan             → Force planning mode
+/edge --verify           → Force verification mode
+/edge --auto             → Force autonomous mode
+```
+
+That's it. Five core variations instead of fifteen commands.
 
 ## Current State
+
 @active_context.yaml
 @.claude/state/gear_state.json (if exists)
-@.claude/state/junction_state.json (if exists)
 
-## v3.9 Three Gears System
+## How It Works
 
-The system automatically operates in one of three gears based on state:
-
-| Gear | Emoji | When Active | Behavior |
-|------|-------|-------------|----------|
-| **ACTIVE** | `[ACTIVE]` | Has objective + pending/in_progress steps | Execute steps, hit junctions |
-| **PATROL** | `[PATROL]` | Objective complete (all steps done) | Scan for issues, surface findings |
-| **DREAM** | `[DREAM]` | No objective or no pending work | Reflect, consolidate, propose improvements |
-
-### Gear Detection Logic
-
-```python
-def detect_gear(state):
-    objective = state.get("objective", "")
-    plan = state.get("plan", [])
-
-    has_work = any(
-        s.get("status") in ("pending", "in_progress")
-        for s in plan
-        if isinstance(s, dict)
-    )
-    if objective and has_work:
-        return "ACTIVE"
-
-    all_complete = bool(plan) and all(
-        s.get("status") == "completed"
-        for s in plan
-        if isinstance(s, dict)
-    )
-    if objective and all_complete:
-        return "PATROL"
-
-    return "DREAM"
-```
-
-### Gear Transitions
+The unified `/edge` uses **Intent Detection** to determine what should happen:
 
 ```
-        ┌─────────────────────────┐
-        │       [ACTIVE]          │
-        │   (executing steps)     │
-        └───────────┬─────────────┘
-     objective done │
-                    ▼
-        ┌─────────────────────────┐
-        │       [PATROL]          │
-        │   (scanning issues)     │
-        └───────┬─────────┬───────┘
-      findings │         │ no findings
-      (junction)         ▼
-                    ┌─────────────────┐
- no objective/work  │     [DREAM]     │
-        └──────────►│ (reflect/propose)│
-                    └───────┬─────────┘
-                 proposal approved │
-                                  ▼
-                               [ACTIVE]
+User → /edge [args]
+     → Intent Detection (what should we do?)
+     → Pattern Surfacing (what worked before?)
+     → Action Execution (do it)
+     → Result (continue or wait)
 ```
+
+### Intent Detection Flow
+
+```
+1. Parse arguments (overrides, commands, objectives)
+2. Check for pending junction (must address first)
+3. Detect current gear (ACTIVE / PATROL / DREAM)
+4. Determine gear-specific intent
+5. Surface relevant patterns
+6. Execute or pause
+```
+
+### The Three Gears
+
+| Gear | When Active | What Happens |
+|------|-------------|--------------|
+| **ACTIVE** | Has objective + pending steps | Execute steps, hit junctions |
+| **PATROL** | Objective complete | Scan for issues, surface findings |
+| **DREAM** | No objective or work | Reflect, consolidate, propose |
 
 ## Instructions
 
 When `/edge` is called:
 
-### Step 1: Detect Current Gear
+### Step 1: Run the Unified Entry Point
 
-Read `active_context.yaml` and determine the gear:
+The gear_engine.py contains `run_unified_edge()` which handles everything:
 
-```
-[GEAR] Detecting state...
-[GEAR] Objective: "..." (or empty)
-[GEAR] Plan: N steps (M pending, K completed)
-[GEAR] Current gear: ACTIVE | PATROL | DREAM
-```
+```python
+from gear_engine import run_unified_edge
+from edge_utils import load_yaml_state
 
-### Step 2: Execute Gear-Specific Logic
+state = load_yaml_state()
+result = run_unified_edge(state, args="$ARGUMENTS")
 
-#### If ACTIVE Gear:
-1. Validate preconditions (objective, plan, no blocked steps)
-2. Find current step (first pending or in_progress)
-3. Check for junctions (dangerous/complex operations)
-4. Execute step or pause at junction
-5. On completion → run quality gate, then transition to PATROL if passed
+# Display the result
+print(result.display_message)
 
-```
-[ACTIVE] Executing step 2/5: "Add validation logic"
-[ACTIVE] Step complete - 3/5 done
+# If guidance was surfaced, it's already in display_message
+# If action requires user input, requires_user_input=True
+# If loop should continue, continue_loop=True
 ```
 
-#### If PATROL Gear:
-1. Run scout scan for issues (TODOs, missing tests, violations)
-2. Surface top findings
-3. If findings exist → JUNCTION for user selection
-4. If no findings → transition to DREAM
+### Step 2: Display Output
 
-```
-[PATROL] Scanning codebase...
-[PATROL] Found 3 actionable items
-[PATROL] Top finding: "Missing tests for utils.py" (Simple)
-[PATROL] Auto-selecting and planning...
-```
+The result contains everything:
+- `display_message`: Human-readable output (show this)
+- `intent_action`: What was decided
+- `gear`: Which gear we're in
+- `guidance`: Pattern guidance (Phase 2)
+- `continue_loop`: Should we continue?
+- `requires_user_input`: Waiting for user?
 
-#### If DREAM Gear:
-1. Analyze lessons for consolidation opportunities
-2. Identify patterns in completed work
-3. Generate improvement proposals (rate-limited: max 1 per session)
-4. If proposal generated → JUNCTION for user approval
-5. If no proposals → transition back to PATROL after reflection
+### Step 3: Act Based on Intent
 
-```
-[DREAM] Reflecting on session...
-[DREAM] Consolidation opportunities: 2 similar lessons
-[DREAM] Pattern detected: Dominant theme is "testing" (5x)
-[DREAM] Proposal: "Add audit patterns to more lessons"
-```
+| Intent | Action |
+|--------|--------|
+| `needs_objective` | Prompt user for objective |
+| `needs_plan` | Run planning (create steps) |
+| `needs_risks` | Prompt for risk identification |
+| `ready_to_execute` | Execute the current step |
+| `at_junction` | Display junction, wait for decision |
+| `ready_to_complete` | Run quality gate |
+| `run_scan` | Execute patrol scan |
+| `has_findings` | Display findings, wait for selection |
+| `reflect` | Run dream reflection |
+| `has_proposal` | Display proposal, wait for decision |
 
-### Step 3: Handle Arguments
+### Step 4: Handle Execution
 
-| Argument | Action |
-|----------|--------|
-| (none) / `on` | Run gear cycle |
-| `status` | Show current gear and state, don't execute |
-| `off` / `stop` | Reset gear state, stop autonomous mode |
-| `approve` | Clear pending junction, continue |
-| `skip` | Skip pending junction, try next |
-| `dismiss` | Dismiss pending junction (suppressed temporarily) |
+When `intent_action` is `ready_to_execute`:
+
+1. The step description is in `result.result["step"]["description"]`
+2. Pattern guidance (if any) is in `result.guidance`
+3. Execute the step
+4. Mark it complete in active_context.yaml
+5. Run `/edge` again to continue
 
 ## Output Format
 
-### Gear Status Header
-
-Always show current gear at the top:
+### Unified Header
 
 ```
-═══════════════════════════════════════════════════════════════════════════════
-OPERATOR'S EDGE v3.9 - [ACTIVE] Gear
-═══════════════════════════════════════════════════════════════════════════════
+═══════════════════════════════════════════════════════════════
+OPERATOR'S EDGE v6.0 - [GEAR] Mode
+═══════════════════════════════════════════════════════════════
 ```
 
-### ACTIVE Gear Output
+### With Pattern Guidance (Phase 2)
 
 ```
-═══════════════════════════════════════════════════════════════════════════════
-OPERATOR'S EDGE v3.9 - [ACTIVE] Gear
-═══════════════════════════════════════════════════════════════════════════════
+═══════════════════════════════════════════════════════════════
+OPERATOR'S EDGE v6.0 - [ACTIVE] Gear
+═══════════════════════════════════════════════════════════════
 
-Objective: "Add dark mode toggle"
-Progress: 3/5 steps completed
+## Executing Step 3: Add validation logic
 
-[ACTIVE] Executing step 4: "Add CSS variables"
-... (execution output) ...
-[ACTIVE] Step 4 complete
+### 📖 Relevant Lessons
+- +++ **hooks**: Policy is not enforcement - hooks are enforcement
+- + **refactoring**: Facade pattern enables refactoring without...
 
-[ACTIVE] Executing step 5: "Run tests"
-... (execution output) ...
-[ACTIVE] Step 5 complete
+────────────────────────────────────────────────────────────────
+Progress: 2/5
+────────────────────────────────────────────────────────────────
 
-════════════════════════════════════════════════════════════════════════════════
-OBJECTIVE COMPLETE - Transitioning to [PATROL]
-════════════════════════════════════════════════════════════════════════════════
+Proceeding with execution...
 ```
 
-### PATROL Gear Output
+### Junction Display
 
 ```
-═══════════════════════════════════════════════════════════════════════════════
-OPERATOR'S EDGE v3.9 - [PATROL] Gear
-═══════════════════════════════════════════════════════════════════════════════
+────────────────────────────────────────────────────────────────
+JUNCTION: dangerous
+────────────────────────────────────────────────────────────────
 
-[PATROL] Scanning codebase for issues...
-[PATROL] Scanned 45 files in 0.8s
-
-Findings:
-  [1] ~ Missing tests for validator.py
-  [2] ! FIXME: Refactor auth module
-  [3] . TODO: Add logging
-
-[PATROL] Junction: select a finding to work on
-```
-
-### DREAM Gear Output
-
-```
-═══════════════════════════════════════════════════════════════════════════════
-OPERATOR'S EDGE v3.9 - [DREAM] Gear
-═══════════════════════════════════════════════════════════════════════════════
-
-[DREAM] Entering reflection mode...
-
-Consolidation Opportunities:
-  • 'hooks' has 2 similar lessons - could merge
-  • 'memory' has 2 similar lessons - could merge
-
-Patterns Identified:
-  • Dominant themes: testing (5x), hooks (3x)
-  • Memory growth: 26 lessons (consider pruning)
-
-Session Insights:
-  • High-value lessons: hooks, paths, refactoring
-  • 0/26 lessons have audit patterns
-
-────────────────────────────────────────────────────────────────────────────────
-DREAM PROPOSAL
-────────────────────────────────────────────────────────────────────────────────
-
-Title: Add audit patterns to more lessons
-Type: enhancement | Priority: medium
-Description: Only 0/26 lessons have audit patterns - adding them enables
-             automatic violation detection
+Gear: [ACTIVE]
+Reason: Step involves 'deploy' operation
 
 Options:
-  /edge approve  - Accept proposal as new objective
-  /edge skip     - Dismiss and stay in DREAM
-  /edge stop     - Stop autonomous mode
-```
-
-### Junction Output
-
-```
-────────────────────────────────────────────────────────────────────────────────
-JUNCTION: [type]
-────────────────────────────────────────────────────────────────────────────────
-
-Gear: [ACTIVE | PATROL | DREAM]
-Reason: [why we paused]
-Proposed: [what we want to do]
-
-Options:
-  /edge approve  - Continue with proposed action
-  /edge skip     - Skip this, try next
-  /edge dismiss  - Dismiss this junction
-  /edge stop     - Stop autonomous mode
-```
-
-## Decision Tree (v3.9)
-
-```
-/edge
-  │
-  ├─ `status`? ────────────────────────→ Show gear + state, don't run
-  │
-  ├─ `off` / `stop`? ──────────────────→ Reset gear state, show stats
-  │
-  ├─ `approve`? ───────────────────────→ Clear junction, continue
-  │
-  ├─ `skip`? ──────────────────────────→ Skip current, continue
-  │
-  ├─ `dismiss`? ───────────────────────→ Dismiss junction (suppressed)
-  │
-  └─ (no args or `on`) ────────────────→ DETECT GEAR:
-        │
-        ├─ ACTIVE gear? ───────────────→ Execute steps until:
-        │     │                           - Junction (dangerous/complex)
-        │     │                           - All complete → Quality Gate → PATROL
-        │     └─ No objective/work ────→ DREAM
-        │
-        ├─ PATROL gear? ───────────────→ Scout scan, then:
-        │     │                           - Findings → JUNCTION
-        │     └─ No findings? ─────────→ DREAM
-        │
-        └─ DREAM gear? ────────────────→ Reflect, then:
-              │                           - Proposal ready → JUNCTION
-              └─ No proposal? ─────────→ PATROL
+  `/edge approve`  - Continue with proposed action
+  `/edge skip`     - Skip this, try next
+  `/edge dismiss`  - Dismiss this junction
+  `/edge stop`     - Stop autonomous mode
+────────────────────────────────────────────────────────────────
 ```
 
 ## Examples
 
-### Example 1: Starting Fresh (DREAM → PATROL → Junction)
+### Example 1: Fresh Start
+
 ```
 User: /edge
 
-═══════════════════════════════════════════════════════════════════════════════
-OPERATOR'S EDGE v3.9 - [DREAM] Gear
-═══════════════════════════════════════════════════════════════════════════════
+═══════════════════════════════════════════════════════════════
+OPERATOR'S EDGE v6.0 - [DREAM] Gear
+═══════════════════════════════════════════════════════════════
 
-[DREAM] No objective, entering reflection mode...
-[DREAM] Analyzing 26 lessons for patterns...
-[DREAM] No proposals generated (clean state)
-[DREAM] Transitioning to PATROL for scout scan...
+No objective set.
 
-═══════════════════════════════════════════════════════════════════════════════
-OPERATOR'S EDGE v3.9 - [PATROL] Gear
-═══════════════════════════════════════════════════════════════════════════════
-
-[PATROL] Scanning codebase...
-[PATROL] Found 1 actionable item:
-  [1] ~ Missing tests for new_module.py
-
-────────────────────────────────────────────────────────────────────────────────
-JUNCTION: finding_selection
-────────────────────────────────────────────────────────────────────────────────
-
-Options:
-  /edge approve  - Continue with proposed action
-  /edge skip     - Skip this, try next
-  /edge dismiss  - Dismiss this junction
+Usage:
+  `/edge "Your objective here"`
+  `/edge --plan` to enter planning mode
 ```
 
-### Example 2: DREAM Proposal Junction
+### Example 2: New Objective
+
+```
+User: /edge "Add dark mode toggle"
+
+## New Objective: Add dark mode toggle
+
+### 📖 Relevant Lessons
+- + **refactoring**: Facade pattern enables refactoring...
+
+Creating plan...
+```
+
+### Example 3: Ready to Execute
+
 ```
 User: /edge
 
-═══════════════════════════════════════════════════════════════════════════════
-OPERATOR'S EDGE v3.9 - [DREAM] Gear
-═══════════════════════════════════════════════════════════════════════════════
+═══════════════════════════════════════════════════════════════
+OPERATOR'S EDGE v6.0 - [ACTIVE] Gear
+═══════════════════════════════════════════════════════════════
 
-[DREAM] Reflection complete
+## Executing Step 2: Add CSS variables
 
-Insights:
-  • 5 lessons could be consolidated
-  • 0/26 lessons have audit patterns
-  • Pattern: "testing" appears in 40% of recent work
+### 📖 Relevant Lessons
+- **paths**: pathlib.Path handles cross-platform paths correctly
 
-────────────────────────────────────────────────────────────────────────────────
-JUNCTION: proposal
-────────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────
+Progress: 1/5
+────────────────────────────────────────────────────────────────
 
-Proposal: "Consolidate related lessons"
-Description: 5 lessons share the same trigger keywords and could be merged
-
-Options:
-  /edge approve  - Accept as new objective
-  /edge skip     - Dismiss proposal
-  /edge stop     - Stop autonomous mode
+Proceeding with execution...
 ```
 
-## The Philosophy (v3.9)
+### Example 4: Junction
 
-> "Three gears: doing, checking, thinking. Like a productive human."
+```
+User: /edge
 
-- **ACTIVE**: When there's work, do the work
-- **PATROL**: After work, check for issues
-- **DREAM**: When truly idle, reflect and propose
+────────────────────────────────────────────────────────────────
+JUNCTION: dangerous
+────────────────────────────────────────────────────────────────
 
-The gears transition automatically. You only intervene at junctions.
+Gear: [ACTIVE]
+Reason: Step involves 'deploy' operation
+
+Options:
+  `/edge approve`  - Continue with proposed action
+  `/edge skip`     - Skip this, try next
+  `/edge dismiss`  - Dismiss this junction
+  `/edge stop`     - Stop autonomous mode
+────────────────────────────────────────────────────────────────
+
+User: /edge approve
+
+Junction approved. Continuing...
+```
+
+### Example 5: Quality Gate
+
+```
+User: /edge
+
+═══════════════════════════════════════════════════════════════
+OBJECTIVE COMPLETE
+═══════════════════════════════════════════════════════════════
+
+Quality Gate Results:
+  ✓ All steps completed
+  ✓ Verification step present
+  ✓ Intent confirmed
+  ✗ Tests passing (skipped)
+
+Options:
+  `/edge approve`    - Override all checks
+  `/edge approve 4`  - Override check 4 only
+  Fix the issues and run `/edge` again
+```
+
+## Migration Notes
+
+The following commands still work but are deprecated:
+
+| Old Command | New Equivalent |
+|-------------|----------------|
+| `/edge-plan` | `/edge --plan` or `/edge "objective"` |
+| `/edge-step` | `/edge` (auto-detects) |
+| `/edge-verify` | `/edge --verify` |
+| `/edge-yolo on` | `/edge --auto` |
+| `/edge-yolo approve` | `/edge approve` |
+| `/edge-score` | `/edge status` |
+
+## The Philosophy (v6.0)
+
+> "Complexity hidden, intelligence visible."
+
+The user types `/edge`. The system:
+1. Knows where we are (intent detection)
+2. Knows what worked before (pattern surfacing)
+3. Knows what could go wrong (risk awareness)
+4. Does the right thing (smart execution)
+5. Learns from the outcome (feedback loop)
+
+This is the difference between a tool and a partner.
