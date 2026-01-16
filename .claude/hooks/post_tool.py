@@ -8,6 +8,7 @@ Captures:
 2. File edit summaries
 3. Failures logged for retry blocking
 4. Post-commit test suggestions
+5. v7.0: Outcome tracking for rule effectiveness measurement
 """
 import json
 import os
@@ -75,6 +76,39 @@ def reinforce_relevant_lessons(tool_name, tool_input, success):
             log_proof("lesson_match", {"triggers": triggers, "context": context[:100]},
                      f"Lessons [{', '.join(triggers)}] matched tool use", True)
 
+    except (ImportError, Exception):
+        pass  # Best effort - don't fail tool execution
+
+
+def record_tool_outcome(tool_name, tool_input, success):
+    """
+    v7.0: Record tool outcome for rule effectiveness tracking.
+    Correlates with surface events logged by pre_tool.py.
+    """
+    try:
+        from outcome_tracker import log_outcome_event, get_latest_pending_correlation
+
+        # Try to get correlation from pre_tool
+        try:
+            from pre_tool import get_pending_correlation_id
+            correlation_id = get_pending_correlation_id()
+        except (ImportError, Exception):
+            correlation_id = None
+
+        # If no correlation ID from pre_tool, try to get the latest pending
+        if not correlation_id:
+            pending = get_latest_pending_correlation()
+            if pending:
+                correlation_id, _ = pending
+
+        if correlation_id:
+            log_outcome_event(
+                correlation_id=correlation_id,
+                success=success,
+                tool_name=tool_name,
+                was_overridden=False,  # TODO: Detect when user proceeds despite warning
+                error_message=""
+            )
     except (ImportError, Exception):
         pass  # Best effort - don't fail tool execution
 
@@ -200,6 +234,18 @@ def main():
         log_proof(tool_name, {"file": file_path}, "Read file", True)
         success = True
 
+    # For Task tool, log verification observations (v1.1)
+    elif tool_name == "Task":
+        subagent_type = tool_input.get("subagent_type", "")
+        if subagent_type:
+            try:
+                from verification_utils import log_verification_observation
+                log_verification_observation(subagent_type, tool_input)
+            except (ImportError, Exception):
+                pass  # Best effort - don't fail the tool
+        log_proof(tool_name, tool_input, str(tool_result)[:500], True)
+        success = True
+
     # For other tools, generic logging
     else:
         log_proof(tool_name, tool_input, str(tool_result)[:500], True)
@@ -207,6 +253,9 @@ def main():
 
     # v3.10: Reinforce relevant lessons after successful tool use
     reinforce_relevant_lessons(tool_name, tool_input, success)
+
+    # v7.0: Record outcome for rule effectiveness tracking
+    record_tool_outcome(tool_name, tool_input, success)
 
     # v3.11: Auto-resolve pending obligations (Mechanical Learning)
     try:
@@ -224,6 +273,15 @@ def main():
             log_to_session(log_entry)
     except (ImportError, Exception):
         pass  # Obligation system unavailable, continue without
+
+    # Periodic cleanup: 10% sampling to avoid overhead on every tool call
+    try:
+        import random
+        if random.random() < 0.1:  # 10% of invocations
+            from obligation_utils import clear_stale_obligations
+            clear_stale_obligations(max_age_hours=24)
+    except Exception:
+        pass  # Cleanup failure shouldn't affect tool execution
 
 if __name__ == "__main__":
     main()

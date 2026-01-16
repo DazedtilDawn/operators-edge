@@ -8,6 +8,7 @@ Enforces:
 2. Deploy/push confirmation gates
 3. Retry blocking for repeated failures
 4. Plan requirement for file edits
+5. v7.0: Graduated rules enforcement with outcome tracking
 
 Note: YOLO/Dispatch mode is handled by the /edge-yolo command orchestration,
 not by this hook. This hook only enforces safety constraints.
@@ -31,6 +32,9 @@ from edge_utils import (
     load_eval_state,
     save_eval_state,
 )
+
+# v7.0: Pending correlation ID for outcome tracking
+_pending_correlation_id = None
 
 
 def check_bash_command(cmd):
@@ -112,6 +116,57 @@ def check_relevant_lessons(tool_name, tool_input, state):
         return []
 
 
+def check_intent_confirmed(tool_name, tool_input):
+    """
+    Require intent to be confirmed before planning/editing (v1.0 Understanding-First).
+
+    Intent verification ensures we understand what the user wants before we start
+    making changes. This is the first gate in the Understanding → Plan → Execute → Verify rail.
+
+    BACKWARD COMPATIBILITY: This check only applies when:
+    - The intent section exists in active_context.yaml
+    - AND user_wants is set (indicating intent system is being used)
+
+    This allows existing projects without intent sections to continue working.
+    """
+    if tool_name not in ("Edit", "Write", "NotebookEdit"):
+        return None
+
+    # Safe paths bypass intent check (allow bootstrapping)
+    file_path = tool_input.get("file_path", "")
+    safe_paths = [
+        "active_context.yaml",
+        ".proof/",
+        "checklist.md",
+        "archive.md",
+        ".claude/plans/",  # Plan files are safe
+    ]
+    if any(safe in file_path for safe in safe_paths):
+        return None
+
+    state = load_yaml_state()
+    if state is None:
+        return None  # No state = let plan_requirement handle it
+
+    intent = state.get("intent", {})
+    user_wants = intent.get("user_wants", "")
+
+    # BACKWARD COMPATIBILITY: Only check intent if user_wants is set
+    # This means the project has opted into the intent system
+    if not user_wants:
+        return None  # No intent system in use, skip check
+
+    # Intent system is in use - check if confirmed
+    if not intent.get("confirmed", False):
+        return ("ask",
+                f"Intent not confirmed.\n"
+                f"  user_wants: {user_wants[:80]}{'...' if len(user_wants) > 80 else ''}\n"
+                "Set intent.confirmed: true in active_context.yaml, "
+                "or confirm to proceed without intent verification.")
+
+    return None
+
+
 def check_plan_requirement(tool_name, tool_input):
     """
     Require a plan in active_context.yaml before allowing edits.
@@ -153,6 +208,64 @@ def check_plan_requirement(tool_name, tool_input):
 
     return None
 
+
+def check_graduated_rules(tool_name, tool_input):
+    """
+    v7.0: Check graduated rules for violations.
+    Returns (violations, rules_fired) where:
+    - violations: list of RuleViolation objects
+    - rules_fired: list of rule IDs that were checked (for outcome tracking)
+    """
+    if tool_name not in ("Edit", "Write", "NotebookEdit"):
+        return [], []
+
+    try:
+        from rules_engine import check_rules, get_blocking_violation, format_violations
+
+        violations = check_rules(tool_name, tool_input)
+        rules_fired = [v.rule_id for v in violations]
+
+        return violations, rules_fired
+    except (ImportError, Exception):
+        return [], []
+
+
+def log_surface_event_for_outcome(tool_name, tool_input, rules_fired, context_shown):
+    """
+    v7.0: Log surface event and store correlation ID for outcome tracking.
+    """
+    global _pending_correlation_id
+
+    if not rules_fired and not context_shown:
+        return None
+
+    try:
+        from outcome_tracker import generate_correlation_id, log_surface_event
+
+        file_path = tool_input.get("file_path", "")
+        correlation_id = generate_correlation_id()
+
+        log_surface_event(
+            correlation_id=correlation_id,
+            file_path=file_path,
+            rules_fired=rules_fired,
+            context_shown=context_shown,
+            tool_name=tool_name
+        )
+
+        _pending_correlation_id = correlation_id
+        return correlation_id
+    except (ImportError, Exception):
+        return None
+
+
+def get_pending_correlation_id():
+    """Get the pending correlation ID for outcome tracking."""
+    global _pending_correlation_id
+    cid = _pending_correlation_id
+    _pending_correlation_id = None
+    return cid
+
 def main():
     try:
         data = json.load(sys.stdin)
@@ -181,7 +294,12 @@ def main():
         if result and result[0] == "ask":
             respond(*result)
 
-    # Check 2: Plan requirement for edits
+    # Check 2: Intent verification (Understanding-First v1.0)
+    result = check_intent_confirmed(tool_name, tool_input)
+    if result:
+        respond(*result)
+
+    # Check 3: Plan requirement for edits
     result = check_plan_requirement(tool_name, tool_input)
     if result:
         respond(*result)
@@ -189,8 +307,26 @@ def main():
     # Load state for lesson surfacing and evals
     state = load_yaml_state()
 
+    # v7.0: Check graduated rules (enforcement, not just guidance)
+    violations, rules_fired = check_graduated_rules(tool_name, tool_input)
+
     # v3.10: Surface relevant lessons (guidance, not a gate)
     relevant_lessons = check_relevant_lessons(tool_name, tool_input, state)
+    context_shown = [l.get('lesson', '') for l in relevant_lessons]
+
+    # v7.0: Log surface event for outcome tracking
+    log_surface_event_for_outcome(tool_name, tool_input, rules_fired, context_shown)
+
+    # v7.0: Handle blocking rule violations
+    if violations:
+        try:
+            from rules_engine import get_blocking_violation, format_violations
+            blocking = get_blocking_violation(violations)
+            if blocking:
+                decision, message = blocking.to_response()
+                respond(decision, message)
+        except (ImportError, Exception):
+            pass
 
     # v3.11: Create obligations for surfaced lessons (Mechanical Learning)
     if relevant_lessons:
@@ -228,10 +364,24 @@ def main():
                     eval_state["triage"] = evals_config.get("triage", {})
                     save_eval_state(eval_state)
 
-    # All checks passed - include relevant lessons in approval message
+    # Build approval message with all relevant info
+    messages = []
+
+    # v7.0: Include rule violations (warnings)
+    if violations:
+        try:
+            from rules_engine import format_violations
+            messages.append(format_violations(violations))
+        except (ImportError, Exception):
+            pass
+
+    # Include relevant lessons
     if relevant_lessons:
         lesson_text = "\n".join([f"  - [{l['trigger']}]: {l['lesson']}" for l in relevant_lessons])
-        respond("approve", f"Relevant lessons:\n{lesson_text}")
+        messages.append(f"Relevant lessons:\n{lesson_text}")
+
+    if messages:
+        respond("approve", "\n\n".join(messages))
     else:
         respond("approve", "Passed all pre-tool checks")
 
