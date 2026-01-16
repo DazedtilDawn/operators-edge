@@ -1178,3 +1178,161 @@ def get_schema_version(state):
 def generate_mismatch_id():
     """Generate a unique mismatch ID."""
     return f"mismatch-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+
+# =============================================================================
+# INTENT VERIFICATION (Understanding-First v1.0)
+# =============================================================================
+
+def get_intent(state: dict = None) -> dict:
+    """
+    Get the intent section from state.
+
+    Args:
+        state: The active_context state dict. If None, loads from file.
+
+    Returns:
+        Intent dict with keys: user_wants, success_looks_like, confirmed, confirmed_at
+        Returns empty dict if intent section doesn't exist.
+    """
+    if state is None:
+        state = load_yaml_state() or {}
+
+    return state.get("intent", {})
+
+
+def is_intent_confirmed(state: dict = None) -> bool:
+    """
+    Check if intent is confirmed.
+
+    Args:
+        state: The active_context state dict. If None, loads from file.
+
+    Returns:
+        True if intent.confirmed is true, False otherwise.
+    """
+    intent = get_intent(state)
+    return intent.get("confirmed", False) is True
+
+
+def set_intent_confirmed(confirmed: bool = True, state: dict = None) -> bool:
+    """
+    Set the intent.confirmed flag in state file.
+
+    Args:
+        confirmed: Whether to mark intent as confirmed
+        state: State dict (used to check if intent section exists)
+
+    Returns:
+        True on success, False on failure
+    """
+    if state is None:
+        state = load_yaml_state() or {}
+
+    # Check if intent section exists
+    intent = state.get("intent", {})
+    if not intent.get("user_wants"):
+        return False  # Can't confirm without user_wants
+
+    yaml_file = get_project_dir() / "active_context.yaml"
+    if not yaml_file.exists():
+        return False
+
+    try:
+        content = yaml_file.read_text()
+        lines = content.split('\n')
+        new_lines = []
+        in_intent_section = False
+        confirmed_line_found = False
+
+        for line in lines:
+            stripped = line.strip()
+            indent_level = len(line) - len(line.lstrip())
+
+            # Track when we enter/exit intent section
+            if stripped == "intent:" or stripped.startswith("intent: "):
+                in_intent_section = True
+                new_lines.append(line)
+                continue
+            elif in_intent_section and indent_level == 0 and stripped and not stripped.startswith("#"):
+                # Back to root level (no indentation) = exit intent section
+                in_intent_section = False
+
+            # Update confirmed field within intent section
+            if in_intent_section and stripped.startswith("confirmed:") and not stripped.startswith("confirmed_at"):
+                new_lines.append(f"{' ' * indent_level}confirmed: {'true' if confirmed else 'false'}")
+                confirmed_line_found = True
+                continue
+            elif in_intent_section and stripped.startswith("confirmed_at:"):
+                if confirmed:
+                    new_lines.append(f"{' ' * indent_level}confirmed_at: \"{datetime.now().isoformat()}\"")
+                    continue
+
+            new_lines.append(line)
+
+        if not confirmed_line_found:
+            return False  # No confirmed field to update
+
+        write_text_atomic(yaml_file, '\n'.join(new_lines))
+        return True
+    except Exception:
+        return False
+
+
+def get_intent_summary(state: dict = None) -> str:
+    """
+    Get a one-line summary of current intent state.
+
+    Returns:
+        String like "Intent: confirmed" or "Intent: NOT confirmed (user_wants set)"
+    """
+    intent = get_intent(state)
+    if not intent:
+        return "Intent: not set"
+
+    user_wants = intent.get("user_wants", "")
+    confirmed = intent.get("confirmed", False)
+
+    if confirmed:
+        return "Intent: confirmed"
+    elif user_wants:
+        return f"Intent: NOT confirmed (user_wants: {user_wants[:40]}...)"
+    else:
+        return "Intent: not set"
+
+
+def get_success_criteria(state: dict = None) -> list:
+    """
+    Get structured success criteria from intent (v1.1).
+
+    Success criteria are optional testable assertions that complement
+    the free-text success_looks_like field.
+
+    Example schema:
+        success_criteria:
+          - type: file_exists
+            path: src/components/DarkModeToggle.tsx
+          - type: test_passes
+            command: npm test -- DarkModeToggle
+          - type: manual
+            description: "Toggle visible in settings"
+
+    Args:
+        state: The active_context state dict. If None, loads from file.
+
+    Returns:
+        List of criterion dicts, or empty list if not defined
+    """
+    intent = get_intent(state)
+    return intent.get("success_criteria", [])
+
+
+def has_structured_criteria(state: dict = None) -> bool:
+    """
+    Check if intent has structured success criteria (v1.1).
+
+    Returns:
+        True if success_criteria array exists and is non-empty
+    """
+    criteria = get_success_criteria(state)
+    return bool(criteria)

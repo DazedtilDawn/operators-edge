@@ -305,6 +305,7 @@ def check_no_unresolved_mismatches(state: Dict[str, Any]) -> QualityCheck:
     Check that there are no unresolved mismatches.
 
     Mismatches should be resolved (learned from) before objective is complete.
+    v1.1: Special handling for intent-linked mismatches from verification failures.
     """
     mismatches = state.get("mismatches", [])
 
@@ -316,20 +317,39 @@ def check_no_unresolved_mismatches(state: Dict[str, Any]) -> QualityCheck:
         )
 
     unresolved = []
+    intent_linked = []  # v1.1: Track intent-linked mismatches separately
+
     for i, mm in enumerate(mismatches):
         if not isinstance(mm, dict):
             continue
         if mm.get("status") != "resolved":
-            expected = mm.get("expected", "?")[:30]
-            unresolved.append(f"Mismatch {i+1}: Expected '{expected}...'")
+            expected = mm.get("expectation", mm.get("expected", "?"))[:30]
 
-    if unresolved:
+            # v1.1: Check for intent-linked mismatch
+            if mm.get("intent_link"):
+                intent_linked.append(f"Mismatch {i+1}: Intent criteria '{expected}...'")
+            else:
+                unresolved.append(f"Mismatch {i+1}: Expected '{expected}...'")
+
+    if unresolved or intent_linked:
+        # Build message with special handling for intent-linked mismatches
+        details = unresolved + intent_linked
+        total = len(unresolved) + len(intent_linked)
+
+        # v1.1: Add guidance for intent-linked mismatches
+        if intent_linked:
+            details.append("")
+            details.append("💡 Intent-linked mismatches suggest:")
+            details.append("   1. Implementation may not fully match user intent")
+            details.append("   2. Success criteria (success_looks_like) may need clarification")
+            details.append("   3. Review and update intent before re-verifying")
+
         return QualityCheck(
             name="no_unresolved_mismatches",
             passed=False,
-            message=f"{len(unresolved)} unresolved mismatch(es)",
+            message=f"{total} unresolved mismatch(es)" + (f" ({len(intent_linked)} intent-linked)" if intent_linked else ""),
             severity="error",
-            details=unresolved,
+            details=details,
         )
 
     return QualityCheck(
@@ -355,6 +375,82 @@ def _extract_keywords(text: str) -> List[str]:
 
     words = re.split(r'[^a-z0-9]+', text)
     return [w for w in words if w and len(w) > 2 and w not in stop_words]
+
+
+def check_verification_step_exists(state: Dict[str, Any]) -> QualityCheck:
+    """
+    Check that at least one verification step exists and is completed (Understanding-First v1.0).
+
+    A verification step has is_verification: true and validates that the intent's
+    success criteria are met. This ensures work is independently verified before
+    being considered done.
+
+    Returns:
+        QualityCheck with passed=False if:
+        - No verification step exists in plan
+        - Verification step exists but is not completed
+    """
+    plan = state.get("plan", [])
+    intent = state.get("intent", {})
+
+    # If no intent set, skip this check (backward compatibility)
+    if not intent.get("user_wants"):
+        return QualityCheck(
+            name="verification_step_exists",
+            passed=True,
+            message="No intent set - verification step not required",
+        )
+
+    if not plan:
+        return QualityCheck(
+            name="verification_step_exists",
+            passed=False,
+            message="No plan steps - cannot verify objective completion",
+            severity="error",
+        )
+
+    # Find verification steps (is_verification: true)
+    verification_steps = [
+        s for s in plan
+        if isinstance(s, dict) and s.get("is_verification")
+    ]
+
+    if not verification_steps:
+        return QualityCheck(
+            name="verification_step_exists",
+            passed=False,
+            message="No verification step in plan",
+            severity="error",
+            details=[
+                "Add a step with is_verification: true that validates success criteria",
+                f"Success criteria: {intent.get('success_looks_like', 'not specified')[:60]}..."
+            ]
+        )
+
+    # Check if any verification step is completed
+    completed_verification = [
+        s for s in verification_steps
+        if s.get("status") == "completed"
+    ]
+
+    if not completed_verification:
+        first_verification = verification_steps[0]
+        status = first_verification.get("status", "pending")
+        desc = first_verification.get("description", "verification step")[:50]
+        return QualityCheck(
+            name="verification_step_exists",
+            passed=False,
+            message=f"Verification step exists but not completed (status: {status})",
+            severity="error",
+            details=[f"Complete: {desc}"]
+        )
+
+    # Verification step exists and is completed
+    return QualityCheck(
+        name="verification_step_exists",
+        passed=True,
+        message=f"Verification step completed ({len(completed_verification)} of {len(verification_steps)})",
+    )
 
 
 # =============================================================================
@@ -383,6 +479,7 @@ def run_quality_gate(
     checks.append(check_verifications_tested(state, project_dir))
     checks.append(check_no_unresolved_mismatches(state))
     checks.append(check_eval_gate(state))
+    checks.append(check_verification_step_exists(state))  # Understanding-First v1.0
 
     # Categorize results
     failed = [c for c in checks if not c.passed and c.severity == "error"]

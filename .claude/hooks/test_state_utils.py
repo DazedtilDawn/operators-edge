@@ -705,5 +705,175 @@ class TestRuntimeState(unittest.TestCase):
                 self.assertEqual(result["dispatch"], {})
 
 
+# =============================================================================
+# Intent Verification Tests (Understanding-First v1.0)
+# =============================================================================
+
+class TestIntentVerification(unittest.TestCase):
+    """Tests for intent verification functions (Understanding-First v1.0)."""
+
+    def test_get_intent_with_state(self):
+        """get_intent should return intent section from state."""
+        from state_utils import get_intent
+
+        state = {
+            "intent": {
+                "user_wants": "Add a feature",
+                "success_looks_like": "Feature works",
+                "confirmed": True
+            }
+        }
+
+        intent = get_intent(state)
+        self.assertEqual(intent["user_wants"], "Add a feature")
+        self.assertTrue(intent["confirmed"])
+
+    def test_get_intent_missing_section(self):
+        """get_intent should return empty dict if no intent section."""
+        from state_utils import get_intent
+
+        state = {"objective": "test"}
+        intent = get_intent(state)
+        self.assertEqual(intent, {})
+
+    def test_get_intent_empty_state(self):
+        """get_intent should handle empty/None state."""
+        from state_utils import get_intent
+
+        self.assertEqual(get_intent({}), {})
+        # With None, it will try to load from file
+        with patch('state_utils.load_yaml_state', return_value=None):
+            self.assertEqual(get_intent(None), {})
+
+    def test_is_intent_confirmed_true(self):
+        """is_intent_confirmed should return True when confirmed."""
+        from state_utils import is_intent_confirmed
+
+        state = {
+            "intent": {
+                "user_wants": "Add a feature",
+                "confirmed": True
+            }
+        }
+
+        self.assertTrue(is_intent_confirmed(state))
+
+    def test_is_intent_confirmed_false(self):
+        """is_intent_confirmed should return False when not confirmed."""
+        from state_utils import is_intent_confirmed
+
+        state = {
+            "intent": {
+                "user_wants": "Add a feature",
+                "confirmed": False
+            }
+        }
+
+        self.assertFalse(is_intent_confirmed(state))
+
+    def test_is_intent_confirmed_missing(self):
+        """is_intent_confirmed should return False when intent missing."""
+        from state_utils import is_intent_confirmed
+
+        self.assertFalse(is_intent_confirmed({"objective": "test"}))
+        self.assertFalse(is_intent_confirmed({}))
+
+    def test_is_intent_confirmed_no_confirmed_field(self):
+        """is_intent_confirmed should return False when confirmed field missing."""
+        from state_utils import is_intent_confirmed
+
+        state = {
+            "intent": {
+                "user_wants": "Add a feature"
+                # No 'confirmed' field
+            }
+        }
+
+        self.assertFalse(is_intent_confirmed(state))
+
+    def test_get_intent_summary_confirmed(self):
+        """get_intent_summary should report confirmed intent."""
+        from state_utils import get_intent_summary
+
+        state = {
+            "intent": {
+                "user_wants": "Add a feature",
+                "confirmed": True
+            }
+        }
+
+        summary = get_intent_summary(state)
+        self.assertIn("confirmed", summary.lower())
+        self.assertNotIn("NOT", summary)
+
+    def test_get_intent_summary_not_confirmed(self):
+        """get_intent_summary should report unconfirmed intent."""
+        from state_utils import get_intent_summary
+
+        state = {
+            "intent": {
+                "user_wants": "Add a very important feature",
+                "confirmed": False
+            }
+        }
+
+        summary = get_intent_summary(state)
+        self.assertIn("NOT confirmed", summary)
+        self.assertIn("Add a very", summary)
+
+    def test_get_intent_summary_not_set(self):
+        """get_intent_summary should report when intent not set."""
+        from state_utils import get_intent_summary
+
+        summary = get_intent_summary({"objective": "test"})
+        self.assertIn("not set", summary.lower())
+
+    @patch('state_utils.get_project_dir')
+    def test_set_intent_confirmed_success(self, mock_project_dir):
+        """set_intent_confirmed should update YAML file."""
+        from state_utils import set_intent_confirmed
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_project_dir.return_value = Path(tmpdir)
+
+            yaml_content = """objective: "Test"
+intent:
+  user_wants: "Add feature"
+  success_looks_like: "Works"
+  confirmed: false
+  confirmed_at: null
+plan:
+  - description: "Step 1"
+    status: pending
+"""
+            yaml_file = Path(tmpdir) / "active_context.yaml"
+            yaml_file.write_text(yaml_content)
+
+            # Set confirmed
+            result = set_intent_confirmed(True, {"intent": {"user_wants": "Add feature"}})
+
+            self.assertTrue(result)
+
+            # Verify file was updated
+            new_content = yaml_file.read_text()
+            self.assertIn("confirmed: true", new_content)
+
+    @patch('state_utils.get_project_dir')
+    def test_set_intent_confirmed_fails_without_user_wants(self, mock_project_dir):
+        """set_intent_confirmed should fail if user_wants not set."""
+        from state_utils import set_intent_confirmed
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_project_dir.return_value = Path(tmpdir)
+
+            yaml_file = Path(tmpdir) / "active_context.yaml"
+            yaml_file.write_text("objective: test")
+
+            # Should fail because no user_wants
+            result = set_intent_confirmed(True, {"intent": {}})
+
+            self.assertFalse(result)
+
+
 if __name__ == '__main__':
     unittest.main()
