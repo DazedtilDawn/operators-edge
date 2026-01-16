@@ -62,6 +62,8 @@ from state_utils import (
     get_memory_items,
     get_schema_version,
     generate_mismatch_id,
+    compute_normalized_current_step,
+    normalize_current_step_file,
 )
 
 # =============================================================================
@@ -155,6 +157,37 @@ from yolo_config import (
 )
 
 # =============================================================================
+# RE-EXPORTS FROM eval_utils.py
+# =============================================================================
+from eval_utils import (
+    DEFAULT_EVALS_CONFIG,
+    get_evals_config,
+    get_eval_state_file,
+    load_eval_state,
+    save_eval_state,
+    auto_triage,
+    build_state_snapshot,
+    get_eval_base_dir,
+    create_eval_run_dir,
+    write_snapshot,
+    compute_state_diff,
+    write_diff,
+    run_invariant_checks,
+    start_eval_run,
+    finish_eval_run,
+    log_eval_run,
+    load_eval_runs,
+    has_eval_run_since,
+    handle_eval_failure,
+    create_mismatch_from_eval,
+    append_mismatch_to_file,
+    cleanup_old_snapshots,
+    get_snapshot_stats,
+    DEFAULT_RETENTION_DAYS,
+    FAILURE_RETENTION_DAYS,
+)
+
+# =============================================================================
 # RE-EXPORTS FROM orchestration_utils.py
 # =============================================================================
 from orchestration_utils import (
@@ -228,6 +261,8 @@ __all__ = [
     "get_memory_items",
     "get_schema_version",
     "generate_mismatch_id",
+    "compute_normalized_current_step",
+    "normalize_current_step_file",
     # Archive
     "log_to_archive",
     "archive_completed_step",
@@ -311,4 +346,23 @@ __all__ = [
     "is_hard_blocked",
     "get_default_yolo_state",
     "get_default_yolo_config",
+    # Evals
+    "DEFAULT_EVALS_CONFIG",
+    "get_evals_config",
+    "get_eval_state_file",
+    "load_eval_state",
+    "save_eval_state",
+    "auto_triage",
+    "build_state_snapshot",
+    "get_eval_base_dir",
+    "create_eval_run_dir",
+    "write_snapshot",
+    "compute_state_diff",
+    "write_diff",
+    "run_invariant_checks",
+    "start_eval_run",
+    "finish_eval_run",
+    "log_eval_run",
+    "load_eval_runs",
+    "has_eval_run_since",
 ]

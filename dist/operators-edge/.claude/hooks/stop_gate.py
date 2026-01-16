@@ -3,9 +3,12 @@
 Operator's Edge v2 - Stop Gate
 Blocks session end until requirements are met.
 
-Requirements:
+Requirements (in normal mode):
 1. active_context.yaml must have been MODIFIED (hash changed)
 2. Proof must exist (session_log.jsonl has entries)
+
+In readonly/plan mode, blocking checks are skipped - Claude is exploring,
+not executing, so no state changes are expected.
 
 Warnings (v2):
 3. Unresolved mismatches should be addressed
@@ -30,8 +33,14 @@ from edge_utils import (
     file_hash,
     load_yaml_state,
     get_unresolved_mismatches,
-    check_state_entropy
+    check_state_entropy,
+    get_evals_config,
+    auto_triage,
+    has_eval_run_since,
 )
+from junction_utils import is_readonly
+from plan_mode import is_plan_mode
+from proof_utils import check_proof_for_session, recover_proof_from_state, graceful_fallback
 
 def respond(decision, reason):
     """Output hook response."""
@@ -57,24 +66,33 @@ def check_state_modified():
     return (True, "State file was modified")
 
 def check_proof_exists():
-    """Verify proof was captured during this session."""
-    proof_dir = get_proof_dir()
-    session_log = proof_dir / "session_log.jsonl"
+    """
+    Verify proof was captured during this session.
 
-    if not session_log.exists():
-        return (False, "No proof log exists. Some tool usage should have been captured.")
+    Uses layered verification with recovery:
+    1. Check session-specific log via check_proof_for_session()
+    2. If missing: Attempt recovery from state hash change
+    3. If recovery fails: Use graceful fallback (never trap user)
 
-    # Check the log has content
-    content = session_log.read_text().strip()
-    if not content:
-        return (False, "Proof log is empty. Did any work happen?")
+    Philosophy: The user should NEVER be trapped.
+    """
+    # Layer 1: Check if proof exists for current session
+    exists, msg, count = check_proof_for_session()
+    if exists:
+        return (True, msg)
 
-    # Count entries
-    entries = [l for l in content.split('\n') if l.strip()]
-    if len(entries) < 1:
-        return (False, "Proof log has no entries.")
+    # Layer 2: Attempt recovery from state modification evidence
+    recovered, recovery_msg = recover_proof_from_state()
+    if recovered:
+        return (True, f"Proof recovered: {recovery_msg}")
 
-    return (True, f"Proof log has {len(entries)} entries")
+    # Layer 3: Graceful fallback - never trap the user
+    should_allow, fallback_msg = graceful_fallback()
+    if should_allow:
+        return (True, fallback_msg)
+
+    # Only block if truly nothing happened
+    return (False, f"{msg} | Recovery failed: {recovery_msg}")
 
 def check_no_in_progress_steps():
     """Warn if steps are still marked in_progress."""
@@ -120,25 +138,58 @@ def check_entropy():
 
     return (True, "State entropy OK")
 
+
+def check_eval_activity():
+    """Warn if evals are enabled but no eval_run recorded this session."""
+    state = load_yaml_state()
+    if not state:
+        return (True, "Could not load state")
+
+    evals_config = get_evals_config(state)
+    if not evals_config.get("enabled", True):
+        return (True, "Evals disabled")
+
+    if evals_config.get("mode") != "manual":
+        evals_config, _triage = auto_triage(state, evals_config, None)
+
+    level = evals_config.get("level", 0)
+    if level < 1:
+        return (True, "Evals not active for this session")
+
+    started_at = None
+    session = state.get("session", {})
+    if isinstance(session, dict):
+        started_at = session.get("started_at")
+
+    if has_eval_run_since(started_at):
+        return (True, "Eval activity recorded")
+
+    return (True, "No eval activity recorded this session")
+
 def main():
     all_passed = True
     messages = []
 
-    # Check 1: State was modified (BLOCKING)
-    passed, msg = check_state_modified()
-    if not passed:
-        all_passed = False
-        messages.append(f"BLOCKED: {msg}")
+    # Check for readonly/plan mode - skip blocking checks if exploring
+    if is_readonly() or is_plan_mode():
+        messages.append("OK: Readonly/plan mode - blocking checks skipped")
+        # Still run warning checks below, but don't block
     else:
-        messages.append(f"OK: {msg}")
+        # Check 1: State was modified (BLOCKING in normal mode only)
+        passed, msg = check_state_modified()
+        if not passed:
+            all_passed = False
+            messages.append(f"BLOCKED: {msg}")
+        else:
+            messages.append(f"OK: {msg}")
 
-    # Check 2: Proof exists (BLOCKING)
-    passed, msg = check_proof_exists()
-    if not passed:
-        all_passed = False
-        messages.append(f"BLOCKED: {msg}")
-    else:
-        messages.append(f"OK: {msg}")
+        # Check 2: Proof exists (BLOCKING in normal mode only)
+        passed, msg = check_proof_exists()
+        if not passed:
+            all_passed = False
+            messages.append(f"BLOCKED: {msg}")
+        else:
+            messages.append(f"OK: {msg}")
 
     # Check 3: In-progress steps (WARNING)
     passed, msg = check_no_in_progress_steps()
@@ -155,6 +206,11 @@ def main():
     # Check 5: Entropy (WARNING - v2)
     passed, msg = check_entropy()
     if "entropy" in msg.lower() or "pruning" in msg.lower():
+        messages.append(f"WARNING: {msg}")
+
+    # Check 6: Eval activity (WARNING)
+    passed, msg = check_eval_activity()
+    if "no eval activity" in msg.lower():
         messages.append(f"WARNING: {msg}")
 
     # Final decision

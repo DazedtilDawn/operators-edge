@@ -16,7 +16,178 @@ import sys
 import time
 from contextlib import contextmanager
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
+
+
+# =============================================================================
+# MODE ENUM (Protocol v4.0)
+# =============================================================================
+
+class Mode(Enum):
+    """
+    Operator mode - the workflow phase.
+
+    PLAN: Exploration, research, thinking (default on session start)
+    ACTIVE: Executing work toward objective
+    REVIEW: Verification, testing, reflection
+    DONE: Clean completion and archival
+    """
+    PLAN = "plan"
+    ACTIVE = "active"
+    REVIEW = "review"
+    DONE = "done"
+
+
+def detect_mode(state: dict = None) -> Mode:
+    """
+    Detect the current mode from state.
+
+    Priority:
+    1. Explicit 'mode' field in state
+    2. Inferred from state:
+       - No objective → PLAN
+       - Has objective + incomplete steps → ACTIVE
+       - Has objective + all steps complete → REVIEW
+       - Explicit mode=done → DONE
+
+    Args:
+        state: The active_context state dict. If None, loads from file.
+
+    Returns:
+        Mode enum value
+    """
+    if state is None:
+        state = load_yaml_state() or {}
+
+    # Check explicit mode field
+    mode_str = state.get("mode")
+    if mode_str:
+        try:
+            return Mode(mode_str.lower())
+        except ValueError:
+            pass  # Invalid mode string, fall through to inference
+
+    # Infer from state
+    objective = state.get("objective")
+    plan = state.get("plan", [])
+
+    # No objective → PLAN mode (exploring)
+    if not objective:
+        return Mode.PLAN
+
+    # Has objective, check plan status
+    if not plan:
+        # Has objective but no plan → ACTIVE (needs planning)
+        return Mode.ACTIVE
+
+    # Count step statuses
+    completed = sum(1 for s in plan if isinstance(s, dict) and s.get("status") == "completed")
+    in_progress = sum(1 for s in plan if isinstance(s, dict) and s.get("status") == "in_progress")
+    pending = sum(1 for s in plan if isinstance(s, dict) and s.get("status") == "pending")
+
+    # All steps complete → REVIEW mode
+    if completed > 0 and in_progress == 0 and pending == 0:
+        return Mode.REVIEW
+
+    # Work in progress → ACTIVE mode
+    return Mode.ACTIVE
+
+
+def suggest_mode_transition(state: dict = None) -> tuple[Mode, Mode, str] | None:
+    """
+    Suggest a mode transition based on current state.
+
+    Returns:
+        Tuple of (current_mode, suggested_mode, reason) if transition suggested,
+        None if no transition appropriate.
+
+    Transition rules:
+    - PLAN → ACTIVE: When objective exists and plan has pending steps
+    - ACTIVE → REVIEW: When all steps are completed
+    - REVIEW → DONE: Only on explicit user action (no auto-suggest)
+    - DONE → PLAN: When state is cleared (no auto-suggest)
+    """
+    if state is None:
+        state = load_yaml_state() or {}
+
+    current_mode = detect_mode(state)
+    objective = state.get("objective")
+    plan = state.get("plan", [])
+
+    # Count step statuses
+    completed = sum(1 for s in plan if isinstance(s, dict) and s.get("status") == "completed")
+    in_progress = sum(1 for s in plan if isinstance(s, dict) and s.get("status") == "in_progress")
+    pending = sum(1 for s in plan if isinstance(s, dict) and s.get("status") == "pending")
+
+    # PLAN → ACTIVE: Has objective and plan with pending steps
+    if current_mode == Mode.PLAN:
+        if objective and plan and pending > 0:
+            return (Mode.PLAN, Mode.ACTIVE, f"Plan ready with {pending} pending steps")
+
+    # ACTIVE → REVIEW: All steps completed
+    elif current_mode == Mode.ACTIVE:
+        if plan and completed > 0 and in_progress == 0 and pending == 0:
+            return (Mode.ACTIVE, Mode.REVIEW, f"All {completed} steps completed - ready for review")
+
+    # No transition suggested
+    return None
+
+
+def set_mode(mode: Mode, state: dict = None) -> dict:
+    """
+    Set the mode in state.
+
+    Args:
+        mode: The Mode to set
+        state: State dict to modify. If None, loads and saves to file.
+
+    Returns:
+        Updated state dict
+    """
+    if state is None:
+        state = load_yaml_state() or {}
+
+    state["mode"] = mode.value
+
+    # Persist to file using text manipulation (preserves YAML structure)
+    state_file = get_project_dir() / "active_context.yaml"
+    if state_file.exists():
+        content = state_file.read_text()
+        lines = content.split('\n')
+        new_lines = []
+        mode_found = False
+
+        for line in lines:
+            if line.startswith('mode:'):
+                new_lines.append(f'mode: "{mode.value}"')
+                mode_found = True
+            else:
+                new_lines.append(line)
+
+        # If mode field doesn't exist, add it after session block
+        if not mode_found:
+            insert_lines = []
+            inserted = False
+            for i, line in enumerate(new_lines):
+                insert_lines.append(line)
+                # Insert after session block (after first blank line following session)
+                if not inserted and line.strip() == '' and i > 0:
+                    prev_line = new_lines[i-1].strip() if i > 0 else ''
+                    if prev_line.startswith('state_hash') or prev_line.startswith('note:'):
+                        insert_lines.append(f'mode: "{mode.value}"')
+                        inserted = True
+            if not inserted:
+                # Fallback: add at beginning after comments
+                for i, line in enumerate(insert_lines):
+                    if line.strip() and not line.strip().startswith('#'):
+                        insert_lines.insert(i, f'mode: "{mode.value}"')
+                        break
+            new_lines = insert_lines
+
+        state_file.write_text('\n'.join(new_lines))
+
+    return state
 
 
 # =============================================================================
@@ -75,7 +246,6 @@ def _lock_path_for(target_path: Path) -> Path:
     return target.with_suffix(target.suffix + ".lock")
 
 
-@contextmanager
 def _read_lock_info(lock_path: Path) -> dict:
     """Read lock metadata from file."""
     try:
@@ -209,6 +379,24 @@ def write_json_atomic(path: Path, data: dict, indent: int = 2,
 def parse_yaml_value(value):
     """Parse a YAML value string into Python type."""
     value = value.strip()
+
+    # Handle quoted strings first - extract just the quoted portion
+    if value.startswith('"'):
+        # Find matching end quote
+        end_idx = value.find('"', 1)
+        if end_idx > 0:
+            return value[1:end_idx]
+    if value.startswith("'"):
+        # Find matching end quote
+        end_idx = value.find("'", 1)
+        if end_idx > 0:
+            return value[1:end_idx]
+
+    # Strip inline comments from unquoted values
+    comment_idx = value.find('  #')
+    if comment_idx > 0:
+        value = value[:comment_idx].strip()
+
     if not value or value == 'null':
         return None
     if value == '[]':
@@ -219,10 +407,6 @@ def parse_yaml_value(value):
         return True
     if value == 'false':
         return False
-    if value.startswith('"') and value.endswith('"'):
-        return value[1:-1]
-    if value.startswith("'") and value.endswith("'"):
-        return value[1:-1]
     # Try number
     try:
         if '.' in value:
@@ -324,17 +508,25 @@ def _parse_simple_list_item(item_content):
 
 
 def _check_for_nested_dict(lines, i, indent):
-    """Check if next non-empty line starts a nested dict."""
-    if i + 1 >= len(lines):
+    """Check if next non-empty, non-comment line starts a nested dict."""
+    # Skip comments and empty lines to find actual next content
+    j = i + 1
+    while j < len(lines):
+        next_line = lines[j]
+        next_stripped = next_line.strip()
+
+        # Skip empty lines and comments
+        if not next_stripped or next_stripped.startswith('#'):
+            j += 1
+            continue
+
+        next_indent = len(next_line) - len(next_line.lstrip())
+
+        if not next_stripped.startswith('- '):
+            if ':' in next_stripped and next_indent > indent:
+                return True, next_indent
         return False, 0
 
-    next_line = lines[i + 1]
-    next_stripped = next_line.strip()
-    next_indent = len(next_line) - len(next_line.lstrip())
-
-    if next_stripped and not next_stripped.startswith('#') and not next_stripped.startswith('- '):
-        if ':' in next_stripped and next_indent > indent:
-            return True, next_indent
     return False, 0
 
 
@@ -423,9 +615,11 @@ def parse_yaml_block(lines, start_idx, base_indent):
 
 
 def parse_nested_dict(lines, start_idx, base_indent):
-    """Parse a nested dictionary block."""
+    """Parse a nested dictionary block with recursive nesting support."""
     result = {}
     i = start_idx
+    current_key = None
+    current_list = None
 
     while i < len(lines):
         line = lines[i]
@@ -437,21 +631,58 @@ def parse_nested_dict(lines, start_idx, base_indent):
 
         indent = len(line) - len(line.lstrip())
 
-        # If dedented, we're done
+        # If dedented past base, we're done
         if indent < base_indent:
             break
 
+        # List item handling
+        if stripped.startswith('- '):
+            if current_key is not None:
+                if current_list is None:
+                    current_list = []
+                item_content = stripped[2:].strip()
+                if ':' in item_content:
+                    # Dict list item
+                    item_dict, i = _parse_dict_list_item(lines, i, indent, item_content)
+                    current_list.append(item_dict)
+                else:
+                    # Simple list item
+                    current_list.append(_parse_simple_list_item(item_content))
+                    i += 1
+                continue
+            i += 1
+            continue
+
         if ':' in stripped:
+            # Save previous list if any
+            if current_key and current_list is not None:
+                result[current_key] = current_list
+                current_list = None
+
             key, _, value = stripped.partition(':')
             key = key.strip()
             value = value.strip()
 
             if value:
                 result[key] = parse_yaml_value(value)
+                current_key = None
             else:
-                result[key] = None
+                current_key = key
+                current_list = None
+
+                # Check for nested dict (recursive)
+                is_nested, next_indent = _check_for_nested_dict(lines, i, indent)
+                if is_nested:
+                    nested_dict, i = parse_nested_dict(lines, i + 1, next_indent)
+                    result[key] = nested_dict
+                    current_key = None
+                    continue
 
         i += 1
+
+    # Save final list
+    if current_key and current_list is not None:
+        result[current_key] = current_list
 
     return result, i
 
@@ -470,6 +701,218 @@ def load_yaml_state():
         return parse_simple_yaml(content)
     except Exception:
         return None
+
+
+# =============================================================================
+# RUNTIME STATE (v5 schema - consolidated junction/gear/dispatch)
+# =============================================================================
+
+def get_runtime_section(state: dict = None, key: str = None) -> dict:
+    """
+    Get a runtime subsection from state.
+
+    Args:
+        state: The full state dict. If None, loads from file.
+        key: The runtime subsection key (junction, gear, dispatch).
+             If None, returns the entire runtime section.
+
+    Returns:
+        The requested section dict, or empty dict if not found.
+    """
+    if state is None:
+        state = load_yaml_state() or {}
+
+    runtime = state.get("runtime", {})
+
+    if key is None:
+        return runtime
+
+    return runtime.get(key, {})
+
+
+def _serialize_runtime_value(value, indent_level: int = 0) -> str:
+    """Serialize a Python value to YAML format."""
+    indent = "  " * indent_level
+
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        # Quote strings that might be ambiguous
+        if value in ("null", "true", "false") or value.isdigit():
+            return f'"{value}"'
+        if any(c in value for c in ":#{}[]&*!|>'\"%@`"):
+            return f'"{value}"'
+        return f'"{value}"'
+    if isinstance(value, list):
+        if not value:
+            return "[]"
+        lines = []
+        for item in value:
+            if isinstance(item, dict):
+                # Dict item in list
+                first = True
+                for k, v in item.items():
+                    prefix = "- " if first else "  "
+                    lines.append(f"{indent}{prefix}{k}: {_serialize_runtime_value(v)}")
+                    first = False
+            else:
+                lines.append(f"{indent}- {_serialize_runtime_value(item)}")
+        return "\n" + "\n".join(lines)
+    if isinstance(value, dict):
+        if not value:
+            return "{}"
+        lines = []
+        for k, v in value.items():
+            serialized = _serialize_runtime_value(v, indent_level + 1)
+            if isinstance(v, (list, dict)) and v and "\n" in serialized:
+                lines.append(f"{indent}  {k}:{serialized}")
+            else:
+                lines.append(f"{indent}  {k}: {serialized}")
+        return "\n" + "\n".join(lines)
+
+    return str(value)
+
+
+def update_runtime_section(key: str, data: dict,
+                           timeout_seconds: float = DEFAULT_LOCK_TIMEOUT) -> bool:
+    """
+    Update a runtime subsection in active_context.yaml atomically.
+
+    Args:
+        key: The runtime subsection key (junction, gear, dispatch)
+        data: The new data for that subsection
+        timeout_seconds: Lock timeout
+
+    Returns:
+        True on success, False on failure
+    """
+    yaml_file = get_project_dir() / "active_context.yaml"
+
+    with file_lock(yaml_file, timeout_seconds=timeout_seconds):
+        try:
+            content = yaml_file.read_text()
+            lines = content.split('\n')
+        except Exception:
+            return False
+
+        # Find the runtime section and the specific key
+        runtime_line_idx = None
+        key_line_idx = None
+        key_end_idx = None
+        key_indent = None
+
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped == "runtime:":
+                runtime_line_idx = i
+            elif runtime_line_idx is not None and stripped.startswith(f"{key}:"):
+                # Found our key under runtime
+                key_line_idx = i
+                key_indent = len(line) - len(line.lstrip())
+
+        if key_line_idx is None:
+            # Key doesn't exist yet - need to add it
+            # This is a more complex case, skip for now
+            return False
+
+        # Find where this key's section ends (next key at same or lower indent)
+        for i in range(key_line_idx + 1, len(lines)):
+            line = lines[i]
+            if not line.strip() or line.strip().startswith('#'):
+                continue
+            indent = len(line) - len(line.lstrip())
+            if indent <= key_indent:
+                key_end_idx = i
+                break
+        else:
+            key_end_idx = len(lines)
+
+        # Build the new section
+        new_lines = [f"{'  ' * (key_indent // 2)}{key}:"]
+        for k, v in data.items():
+            serialized = _serialize_runtime_value(v, key_indent // 2 + 1)
+            if isinstance(v, (list, dict)) and v and "\n" in serialized:
+                new_lines.append(f"{'  ' * (key_indent // 2 + 1)}{k}:{serialized}")
+            else:
+                new_lines.append(f"{'  ' * (key_indent // 2 + 1)}{k}: {serialized}")
+
+        # Replace the section
+        result_lines = lines[:key_line_idx] + new_lines + lines[key_end_idx:]
+
+        try:
+            atomic_write_text(yaml_file, '\n'.join(result_lines))
+            return True
+        except Exception:
+            return False
+
+
+def migrate_json_runtime_state() -> dict:
+    """
+    Migrate existing JSON state files to runtime section.
+
+    Reads from junction_state.json, gear_state.json, dispatch_state.json
+    and returns a dict suitable for the runtime section.
+
+    Returns:
+        Dict with migrated data, or empty dict if no files found.
+    """
+    state_dir = get_state_dir()
+    result = {"junction": {}, "gear": {}, "dispatch": {}}
+
+    # Migrate junction state
+    junction_file = state_dir / "junction_state.json"
+    if junction_file.exists():
+        try:
+            data = json.loads(junction_file.read_text())
+            result["junction"] = {
+                "pending": data.get("pending"),
+                "suppressions": data.get("suppression", []),
+                "history_tail": data.get("history_tail", [])[-10:],
+            }
+        except Exception:
+            pass
+
+    # Migrate gear state
+    gear_file = state_dir / "gear_state.json"
+    if gear_file.exists():
+        try:
+            data = json.loads(gear_file.read_text())
+            result["gear"] = {
+                "current": data.get("current_gear", "active"),
+                "entered_at": data.get("entered_at"),
+                "last_run_at": data.get("last_run_at"),
+                "last_transition": data.get("last_transition"),
+                "iterations": data.get("iterations", 0),
+                "patrol_findings_count": data.get("patrol_findings_count", 0),
+                "dream_proposals_count": data.get("dream_proposals_count", 0),
+            }
+        except Exception:
+            pass
+
+    # Migrate dispatch state
+    dispatch_file = state_dir / "dispatch_state.json"
+    if dispatch_file.exists():
+        try:
+            data = json.loads(dispatch_file.read_text())
+            result["dispatch"] = {
+                "enabled": data.get("enabled", False),
+                "state": data.get("state", "stopped"),
+                "iteration": data.get("iteration", 0),
+                "stuck_count": data.get("stuck_count", 0),
+                "stats": data.get("stats", {
+                    "auto_executed": 0,
+                    "junctions_hit": 0,
+                    "objectives_completed": 0,
+                }),
+            }
+        except Exception:
+            pass
+
+    return result
 
 
 def compute_normalized_current_step(state):
@@ -624,28 +1067,37 @@ def get_recent_failures(command, window_minutes=30):
 # =============================================================================
 
 def log_proof(tool_name, tool_input, result, success):
-    """Append to session proof log."""
-    proof_dir = get_proof_dir()
-    proof_dir.mkdir(parents=True, exist_ok=True)
+    """
+    Append to session proof log.
 
-    log_file = proof_dir / "session_log.jsonl"
+    Delegates to proof_utils.log_proof_entry() for atomic, session-scoped logging.
+    This function maintains backward compatibility while using the new resilient
+    proof logging infrastructure.
+    """
+    try:
+        from proof_utils import log_proof_entry
+        log_proof_entry(tool_name, tool_input, result, success)
+    except ImportError:
+        # Fallback to original implementation if proof_utils not available
+        proof_dir = get_proof_dir()
+        proof_dir.mkdir(parents=True, exist_ok=True)
 
-    # Preserve dict structure if it's a dict (for Edit old_string/new_string)
-    # Otherwise convert to string preview
-    if isinstance(tool_input, dict):
-        input_data = tool_input
-    else:
-        input_data = str(tool_input)[:500]
+        log_file = proof_dir / "session_log.jsonl"
 
-    entry = {
-        "timestamp": datetime.now().isoformat(),
-        "tool": tool_name,
-        "input_preview": input_data,
-        "success": success,
-        "output_preview": str(result)[:1000] if result else None
-    }
-    with open(log_file, "a") as f:
-        f.write(json.dumps(entry) + "\n")
+        if isinstance(tool_input, dict):
+            input_data = tool_input
+        else:
+            input_data = str(tool_input)[:500]
+
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "tool": tool_name,
+            "input_preview": input_data,
+            "success": success,
+            "output_preview": str(result)[:1000] if result else None
+        }
+        with open(log_file, "a") as f:
+            f.write(json.dumps(entry) + "\n")
 
 
 # =============================================================================
@@ -726,3 +1178,161 @@ def get_schema_version(state):
 def generate_mismatch_id():
     """Generate a unique mismatch ID."""
     return f"mismatch-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+
+# =============================================================================
+# INTENT VERIFICATION (Understanding-First v1.0)
+# =============================================================================
+
+def get_intent(state: dict = None) -> dict:
+    """
+    Get the intent section from state.
+
+    Args:
+        state: The active_context state dict. If None, loads from file.
+
+    Returns:
+        Intent dict with keys: user_wants, success_looks_like, confirmed, confirmed_at
+        Returns empty dict if intent section doesn't exist.
+    """
+    if state is None:
+        state = load_yaml_state() or {}
+
+    return state.get("intent", {})
+
+
+def is_intent_confirmed(state: dict = None) -> bool:
+    """
+    Check if intent is confirmed.
+
+    Args:
+        state: The active_context state dict. If None, loads from file.
+
+    Returns:
+        True if intent.confirmed is true, False otherwise.
+    """
+    intent = get_intent(state)
+    return intent.get("confirmed", False) is True
+
+
+def set_intent_confirmed(confirmed: bool = True, state: dict = None) -> bool:
+    """
+    Set the intent.confirmed flag in state file.
+
+    Args:
+        confirmed: Whether to mark intent as confirmed
+        state: State dict (used to check if intent section exists)
+
+    Returns:
+        True on success, False on failure
+    """
+    if state is None:
+        state = load_yaml_state() or {}
+
+    # Check if intent section exists
+    intent = state.get("intent", {})
+    if not intent.get("user_wants"):
+        return False  # Can't confirm without user_wants
+
+    yaml_file = get_project_dir() / "active_context.yaml"
+    if not yaml_file.exists():
+        return False
+
+    try:
+        content = yaml_file.read_text()
+        lines = content.split('\n')
+        new_lines = []
+        in_intent_section = False
+        confirmed_line_found = False
+
+        for line in lines:
+            stripped = line.strip()
+            indent_level = len(line) - len(line.lstrip())
+
+            # Track when we enter/exit intent section
+            if stripped == "intent:" or stripped.startswith("intent: "):
+                in_intent_section = True
+                new_lines.append(line)
+                continue
+            elif in_intent_section and indent_level == 0 and stripped and not stripped.startswith("#"):
+                # Back to root level (no indentation) = exit intent section
+                in_intent_section = False
+
+            # Update confirmed field within intent section
+            if in_intent_section and stripped.startswith("confirmed:") and not stripped.startswith("confirmed_at"):
+                new_lines.append(f"{' ' * indent_level}confirmed: {'true' if confirmed else 'false'}")
+                confirmed_line_found = True
+                continue
+            elif in_intent_section and stripped.startswith("confirmed_at:"):
+                if confirmed:
+                    new_lines.append(f"{' ' * indent_level}confirmed_at: \"{datetime.now().isoformat()}\"")
+                    continue
+
+            new_lines.append(line)
+
+        if not confirmed_line_found:
+            return False  # No confirmed field to update
+
+        write_text_atomic(yaml_file, '\n'.join(new_lines))
+        return True
+    except Exception:
+        return False
+
+
+def get_intent_summary(state: dict = None) -> str:
+    """
+    Get a one-line summary of current intent state.
+
+    Returns:
+        String like "Intent: confirmed" or "Intent: NOT confirmed (user_wants set)"
+    """
+    intent = get_intent(state)
+    if not intent:
+        return "Intent: not set"
+
+    user_wants = intent.get("user_wants", "")
+    confirmed = intent.get("confirmed", False)
+
+    if confirmed:
+        return "Intent: confirmed"
+    elif user_wants:
+        return f"Intent: NOT confirmed (user_wants: {user_wants[:40]}...)"
+    else:
+        return "Intent: not set"
+
+
+def get_success_criteria(state: dict = None) -> list:
+    """
+    Get structured success criteria from intent (v1.1).
+
+    Success criteria are optional testable assertions that complement
+    the free-text success_looks_like field.
+
+    Example schema:
+        success_criteria:
+          - type: file_exists
+            path: src/components/DarkModeToggle.tsx
+          - type: test_passes
+            command: npm test -- DarkModeToggle
+          - type: manual
+            description: "Toggle visible in settings"
+
+    Args:
+        state: The active_context state dict. If None, loads from file.
+
+    Returns:
+        List of criterion dicts, or empty list if not defined
+    """
+    intent = get_intent(state)
+    return intent.get("success_criteria", [])
+
+
+def has_structured_criteria(state: dict = None) -> bool:
+    """
+    Check if intent has structured success criteria (v1.1).
+
+    Returns:
+        True if success_criteria array exists and is non-empty
+    """
+    criteria = get_success_criteria(state)
+    return bool(criteria)

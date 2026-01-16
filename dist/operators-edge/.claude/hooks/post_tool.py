@@ -8,6 +8,7 @@ Captures:
 2. File edit summaries
 3. Failures logged for retry blocking
 4. Post-commit test suggestions
+5. v7.0: Outcome tracking for rule effectiveness measurement
 """
 import json
 import os
@@ -21,7 +22,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from edge_utils import (
     get_proof_dir,
     log_failure,
-    log_proof
+    log_proof,
+    load_yaml_state,
+    get_evals_config,
+    auto_triage,
+    load_eval_state,
+    save_eval_state,
+    finish_eval_run,
+    normalize_current_step_file,
+    handle_eval_failure,
 )
 
 
@@ -31,6 +40,77 @@ def is_git_commit_command(cmd):
         return False
     # Match "git commit" but not "git commit --amend" alone
     return bool(re.search(r'\bgit\s+commit\b', cmd))
+
+
+def reinforce_relevant_lessons(tool_name, tool_input, success):
+    """
+    Log relevant lessons that applied to this tool use (v3.10).
+    This surfaces lessons for potential reinforcement - actual persistence
+    happens via normal workflow when Claude edits active_context.yaml.
+    """
+    if not success:
+        return
+
+    # Only track for action tools
+    if tool_name not in ("Edit", "Write", "NotebookEdit", "Bash"):
+        return
+
+    try:
+        from memory_utils import surface_relevant_memory
+
+        state = load_yaml_state()
+        if not state:
+            return
+
+        # Build context from tool input
+        file_path = tool_input.get("file_path", "")
+        command = tool_input.get("command", "")
+        context = f"{tool_name} {file_path} {command}"
+
+        # Find relevant lessons (v3.12: pass file_path for pattern filtering)
+        relevant = surface_relevant_memory(state, context, file_path=file_path if file_path else None)
+
+        # Log relevant lessons for visibility (reinforcement happens via normal workflow)
+        if relevant:
+            triggers = [l.get("trigger", "?") for l in relevant]
+            log_proof("lesson_match", {"triggers": triggers, "context": context[:100]},
+                     f"Lessons [{', '.join(triggers)}] matched tool use", True)
+
+    except (ImportError, Exception):
+        pass  # Best effort - don't fail tool execution
+
+
+def record_tool_outcome(tool_name, tool_input, success):
+    """
+    v7.0: Record tool outcome for rule effectiveness tracking.
+    Correlates with surface events logged by pre_tool.py.
+    """
+    try:
+        from outcome_tracker import log_outcome_event, get_latest_pending_correlation
+
+        # Try to get correlation from pre_tool
+        try:
+            from pre_tool import get_pending_correlation_id
+            correlation_id = get_pending_correlation_id()
+        except (ImportError, Exception):
+            correlation_id = None
+
+        # If no correlation ID from pre_tool, try to get the latest pending
+        if not correlation_id:
+            pending = get_latest_pending_correlation()
+            if pending:
+                correlation_id, _ = pending
+
+        if correlation_id:
+            log_outcome_event(
+                correlation_id=correlation_id,
+                success=success,
+                tool_name=tool_name,
+                was_overridden=False,  # TODO: Detect when user proceeds despite warning
+                error_message=""
+            )
+    except (ImportError, Exception):
+        pass  # Best effort - don't fail tool execution
 
 
 def run_tests_after_commit():
@@ -121,14 +201,87 @@ def main():
         else:
             log_proof(tool_name, {"file": file_path}, f"Modified: {file_path}", success)
 
+        # Auto-normalize current_step when active_context.yaml is edited
+        if "active_context.yaml" in file_path:
+            normalize_current_step_file()
+
+        # Eval automation: finalize eval run for write/edit tools
+        eval_state = load_eval_state()
+        pending_run = eval_state.get("pending_run")
+        if pending_run and pending_run.get("tool") == tool_name:
+            state = load_yaml_state()
+            evals_config = get_evals_config(state)
+            evals_config, _triage = auto_triage(state, evals_config, tool_name)
+
+            if evals_config.get("enabled", True) and evals_config.get("mode") != "manual":
+                if evals_config.get("level", 0) >= 1:
+                    eval_entry = finish_eval_run(pending_run, evals_config, success)
+
+                    # Auto-mismatch on eval failure (v3.9.8)
+                    if eval_entry and eval_entry.get("invariants_failed"):
+                        handle_eval_failure(eval_entry)
+
+            eval_state["last_run"] = pending_run
+            eval_state["pending_run"] = None
+            save_eval_state(eval_state)
+        elif pending_run:
+            eval_state["pending_run"] = None
+            save_eval_state(eval_state)
+
     # For Read, just note what was read (lightweight)
     elif tool_name == "Read":
         file_path = tool_input.get("file_path", "unknown")
         log_proof(tool_name, {"file": file_path}, "Read file", True)
+        success = True
+
+    # For Task tool, log verification observations (v1.1)
+    elif tool_name == "Task":
+        subagent_type = tool_input.get("subagent_type", "")
+        if subagent_type:
+            try:
+                from verification_utils import log_verification_observation
+                log_verification_observation(subagent_type, tool_input)
+            except (ImportError, Exception):
+                pass  # Best effort - don't fail the tool
+        log_proof(tool_name, tool_input, str(tool_result)[:500], True)
+        success = True
 
     # For other tools, generic logging
     else:
         log_proof(tool_name, tool_input, str(tool_result)[:500], True)
+        success = True
+
+    # v3.10: Reinforce relevant lessons after successful tool use
+    reinforce_relevant_lessons(tool_name, tool_input, success)
+
+    # v7.0: Record outcome for rule effectiveness tracking
+    record_tool_outcome(tool_name, tool_input, success)
+
+    # v3.11: Auto-resolve pending obligations (Mechanical Learning)
+    try:
+        from obligation_utils import auto_resolve_obligations, log_obligation_event
+        from proof_utils import log_to_session
+
+        resolved = auto_resolve_obligations(tool_name, success, tool_input)
+
+        # Log resolution to proof
+        state = load_yaml_state()
+        session_id = state.get('session', {}).get('id', '') if state else ''
+
+        for ob in resolved:
+            log_entry = log_obligation_event(ob.status, ob, session_id)
+            log_to_session(log_entry)
+    except (ImportError, Exception):
+        pass  # Obligation system unavailable, continue without
+
+    # Periodic cleanup: 10% sampling to avoid overhead on every tool call
+    try:
+        import random
+        if random.random() < 0.1:  # 10% of invocations
+            from obligation_utils import clear_stale_obligations
+            clear_stale_obligations(max_age_hours=24)
+    except Exception:
+        pass  # Cleanup failure shouldn't affect tool execution
 
 if __name__ == "__main__":
     main()

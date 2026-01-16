@@ -3,6 +3,8 @@ description: Self-assessment against the 6-check adaptation rubric
 allowed-tools: Read, Edit, Write
 ---
 
+> **[v4.0 NOTE]** Self-scoring is part of the completion workflow. Use `/edge done` mode after scoring to archive completed work.
+
 # Self-Score: 6-Check Assessment
 
 Evaluate your adaptive behavior during this session against the 6-check rubric.

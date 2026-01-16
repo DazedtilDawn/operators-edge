@@ -82,7 +82,10 @@ COMPLEXITY_THRESHOLDS = {
 MEMORY_SETTINGS = {
     "decay_threshold_days": 14,
     "reinforcement_threshold": 2,  # Lessons with 2+ reinforcements are kept
-    "max_memory_items": 20
+    "max_memory_items": 20,
+    # Proof-Grounded Memory (v3.10.1)
+    "vitality_threshold": 1,       # Lessons with 1+ proof matches are protected from decay
+    "vitality_lookback_days": 14,  # How many days of proof to scan for vitality
 }
 
 
@@ -104,4 +107,30 @@ ARCHIVE_SETTINGS = {
 ENTROPY_THRESHOLDS = {
     "max_completed_steps": 3,  # More than this triggers pruning suggestion
     "max_resolved_mismatches": 0  # Any resolved mismatch should be archived
+}
+
+
+# =============================================================================
+# PROOF SETTINGS (Resilient Proof Logging)
+# =============================================================================
+
+PROOF_SETTINGS = {
+    "max_session_age_days": 7,      # Archive sessions older than this
+    "recovery_enabled": True,        # Allow proof recovery from state changes
+    "backward_compat_symlink": True, # Maintain session_log.jsonl symlink
+}
+
+
+# =============================================================================
+# ARCHIVE RETENTION POLICY (v3.10 - Living Memory)
+# =============================================================================
+
+ARCHIVE_RETENTION = {
+    # Type-based retention in days
+    "completed_step": 30,          # Raw work data, loses value quickly
+    "decayed_lesson": 90,          # May want to resurrect patterns
+    "completed_objective": 365,    # High-level summaries, valuable long-term
+    "resolved_mismatch": 90,       # Learning from failures
+    "discovery_proposal": 60,      # Feature proposals
+    "default": 90,                 # Default for unknown types
 }

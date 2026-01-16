@@ -31,6 +31,9 @@ class Lesson:
         applies_to: Contexts where this lesson applies
         source: Session or source that created this lesson
 
+    Evergreen field (v3.10):
+        evergreen: If True, this lesson never decays (core principles)
+
     Audit fields (v3.6, optional):
         audit_pattern: Regex pattern to find violations in code
         audit_scope: File globs to limit scan scope (e.g., ["*.py"])
@@ -46,6 +49,9 @@ class Lesson:
     last_used: Optional[str] = None
     applies_to: List[str] = field(default_factory=list)
     source: Optional[str] = None
+
+    # Evergreen field (v3.10) - never decays
+    evergreen: bool = False
 
     # Audit fields (v3.6)
     audit_pattern: Optional[str] = None
@@ -68,6 +74,10 @@ class Lesson:
             result["applies_to"] = self.applies_to
         if self.source:
             result["source"] = self.source
+
+        # Evergreen field (only if True)
+        if self.evergreen:
+            result["evergreen"] = True
 
         # Audit fields (only if audit_pattern is set)
         if self.audit_pattern:
@@ -95,6 +105,7 @@ class Lesson:
             last_used=data.get("last_used"),
             applies_to=data.get("applies_to", []),
             source=data.get("source"),
+            evergreen=data.get("evergreen", False),
             audit_pattern=data.get("audit_pattern"),
             audit_scope=data.get("audit_scope", []),
             last_audit=data.get("last_audit"),
@@ -195,7 +206,7 @@ def normalize_lesson(data) -> dict:
     }
 
     # Copy optional fields if present
-    for key in ["last_used", "applies_to", "source",
+    for key in ["last_used", "applies_to", "source", "evergreen",
                 "audit_pattern", "audit_scope", "last_audit", "violations_found"]:
         if key in data and data[key] is not None:
             result[key] = data[key]

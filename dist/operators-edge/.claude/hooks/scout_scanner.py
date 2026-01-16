@@ -558,6 +558,53 @@ def scan_lesson_violations(lessons: List[dict], root_path: Path) -> List[ScoutFi
 
 
 # =============================================================================
+# EVAL FAILURE SCANNER (v3.9.7)
+# =============================================================================
+
+def scan_eval_failures() -> List[ScoutFinding]:
+    """
+    Scan .proof/session_log.jsonl for recent eval invariant failures.
+
+    Returns findings for:
+    - INV-01 failures (schema validation)
+    - INV-02 failures (silent deletions)
+    - Any other invariant failures
+    """
+    findings = []
+
+    try:
+        from eval_utils import load_eval_runs
+    except ImportError:
+        return findings
+
+    runs = load_eval_runs(max_lines=100)
+
+    for run in runs:
+        failed = run.get("invariants_failed", [])
+        if not failed:
+            continue
+
+        tool = run.get("tool", "unknown")
+        diff_path = run.get("snapshots", {}).get("diff", "unknown")
+        timestamp = run.get("timestamp", "")[:19]
+        diff_summary = run.get("diff_summary", {})
+
+        for inv_id in failed:
+            finding = ScoutFinding(
+                type=FindingType.EVAL_FAILURE,
+                priority=FindingPriority.HIGH,
+                title=f"Eval invariant {inv_id} failed",
+                description=f"Invariant {inv_id} failed during {tool} operation at {timestamp}",
+                location=diff_path,
+                context=f"Changes: +{diff_summary.get('added', 0)} -{diff_summary.get('removed', 0)} ~{diff_summary.get('changed', 0)}",
+                suggested_action=f"Review diff at {diff_path} and resolve the violation"
+            )
+            findings.append(finding)
+
+    return findings
+
+
+# =============================================================================
 # MAIN SCANNER
 # =============================================================================
 
@@ -607,6 +654,9 @@ def run_scout_scan(root_path: Optional[Path] = None, state: dict = None) -> Tupl
     # Unverified completion scanner (v3.9.2)
     if state and isinstance(state, dict):
         all_findings.extend(scan_unverified_completions(state, files))
+
+    # Eval failure scanner (v3.9.7)
+    all_findings.extend(scan_eval_failures())
 
     # Sort by priority
     sorted_findings = sort_findings(all_findings)
