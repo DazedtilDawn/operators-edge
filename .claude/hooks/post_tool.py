@@ -16,6 +16,7 @@ Captures:
 10. Session metrics collection (v8.0 Phase 5 - Observability)
 11. Active intervention health tracking (v8.0 Phase 8)
 12. Fix outcome tracking (v8.0 Phase 9 - Closed Loop)
+13. Auto-checkpoint tracking and offers (v8.0 Phase 10)
 """
 import json
 import os
@@ -462,6 +463,43 @@ def main():
             pass  # Modules not available
         except Exception:
             pass  # Don't fail the hook
+
+    # v8.0 Phase 10: Auto-checkpoint tracking
+    # Record tool calls for session state and check for breakpoints
+    try:
+        from auto_checkpoint import (
+            record_tool_call as checkpoint_record_tool,
+            record_error as checkpoint_record_error,
+            record_error_resolved as checkpoint_record_resolved,
+            check_and_offer_checkpoint,
+        )
+
+        # Record tool call
+        file_path = None
+        if tool_name in ("Edit", "Write"):
+            file_path = tool_input.get("file_path")
+        checkpoint_record_tool(tool_name, file_path)
+
+        # Track errors and resolutions for Bash
+        if tool_name == "Bash":
+            exit_code = tool_result.get("exit_code", 0)
+            if exit_code != 0:
+                # Record error
+                stderr = tool_result.get("stderr", "")
+                checkpoint_record_error(stderr[:200] if stderr else f"Exit code {exit_code}")
+            elif _recent_bash_failure.get("error"):
+                # Success after failure - might be resolved
+                checkpoint_record_resolved()
+
+        # Check for natural breakpoints (only after active work)
+        if tool_name in ("Edit", "Write", "NotebookEdit", "Bash"):
+            offer = check_and_offer_checkpoint("tick")
+            if offer:
+                print(f"\n{offer}", file=sys.stderr)
+    except ImportError:
+        pass  # auto_checkpoint not available
+    except Exception:
+        pass  # Don't fail the hook
 
 if __name__ == "__main__":
     main()

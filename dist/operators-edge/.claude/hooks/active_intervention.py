@@ -306,6 +306,20 @@ def determine_intervention_level(
     return level
 
 
+def get_current_level() -> str:
+    """
+    Get current intervention level based on session health.
+
+    This is the public API for other Phase 10 modules to query
+    the current intervention level without needing to understand
+    the health tracking internals.
+
+    Returns one of: "observe", "advise", "guide", "intervene"
+    """
+    config = load_intervention_config()
+    return determine_intervention_level(_current_health, config)
+
+
 # =============================================================================
 # INTERVENTION ACTIONS
 # =============================================================================

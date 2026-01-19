@@ -496,6 +496,10 @@ Write-Host "  - Context Monitor (warns at 75%+ token usage)"
 Write-Host "  - Codebase Knowledge (remembers what fixed errors)"
 Write-Host "  - Session Handoffs (passes context between sessions)"
 Write-Host "  - Outcome Tracking (learns which fixes actually work)"
+Write-Host "  - Smart Read (suggests targeted reads for large files)" -ForegroundColor Green
+Write-Host "  - Auto-Checkpoint (offers checkpoints at natural breakpoints)" -ForegroundColor Green
+Write-Host ""
+Write-Host "Total: 530+ tests | Phase 10 RLM-inspired context management"
 Write-Host ""
 
 exit 0

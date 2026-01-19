@@ -196,8 +196,69 @@ When a fix is surfaced and Claude runs the suggested command:
 
 - 51 tests
 
+### Phase 10.2: Smart Read (`smart_read.py`) ✓
+**Purpose:** RLM-inspired - suggest targeted file reads instead of full context consumption
+
+**The Problem:** Claude reads 5000-line file → context bloat. Most lines aren't relevant.
+Claude already has grep/head/tail access but doesn't always use it proactively.
+
+**The Solution:** Detect large file reads before they happen, suggest targeted approaches:
+
+**Smart Read Suggestions:**
+- Triggers on Read tool for files > 500 lines
+- File-type specific suggestions (Python: grep for def/class, JSON: head for schema, etc.)
+- Severity levels: info (500+), warning (2000+), critical (5000+)
+- Respects intervention level for formatting
+
+**File Type Support:**
+- Python (.py): grep for functions/classes, imports
+- JavaScript/TypeScript (.js/.ts/.tsx): grep for exports, functions
+- JSON (.yaml/.yml): head for structure, key extraction
+- Logs (.log): tail for recent, grep for errors
+- SQL (.sql): grep for CREATE/ALTER TABLE
+- Go (.go): grep for func/type
+- And more...
+
+**Integration:**
+- `pre_tool.py`: Check 9 - surfaces suggestion before Read tool
+- Respects active intervention level for formatting
+
+- 39 tests
+
+### Phase 10.4: Auto-Checkpoint (`auto_checkpoint.py`) ✓
+**Purpose:** RLM-inspired - offer checkpoints at natural breakpoints for session continuity
+
+**The Problem:** Sessions run long without natural stopping points. Context accumulates
+without compression. No structured handoff when context gets high.
+
+**The Solution:** Detect natural breakpoints and offer checkpoints:
+
+**Breakpoint Detection:**
+- **Step Complete**: Always a natural checkpoint opportunity
+- **Error Resolution**: After resolving 3+ errors in session
+- **Time Thresholds**: 30 min (suggestion), 45 min (recommended), 60 min (critical)
+- **Activity Thresholds**: Every 50 tool calls
+
+**Checkpoint Contents:**
+- Session metrics (duration, tool calls, errors, files modified)
+- Trigger type (step_complete, time, error_resolved, manual)
+- Context usage percentage
+- Formatted offers with urgency-based styling
+
+**Session State Tracking:**
+- `init_session()`: Initialize session state
+- `record_tool_call()`: Track tool calls and file modifications
+- `record_error()` / `record_error_resolved()`: Track error lifecycle
+- State persisted to `.proof/checkpoint_state.json`
+
+**Integration:**
+- `session_start.py`: Initialize session state at start
+- `post_tool.py`: Track tools, errors, check for breakpoints
+
+- 28 tests
+
 ### Test Coverage
-- 325 new tests for v8.0:
+- 392 new tests for v8.0:
   - Phase 1 (drift): 24 tests
   - Phase 2 (context): 33 tests
   - Phase 3 (knowledge): 31 tests
@@ -207,7 +268,9 @@ When a fix is surfaced and Claude runs the suggested command:
   - Phase 7 (effectiveness): 50 tests
   - Phase 8 (intervention): 41 tests
   - Phase 9 (outcomes): 51 tests
-- Total core tests: 440+
+  - Phase 10.2 (smart read): 39 tests
+  - Phase 10.4 (auto-checkpoint): 28 tests
+- Total core tests: 530+
 
 ---
 

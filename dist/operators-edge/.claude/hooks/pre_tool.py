@@ -14,6 +14,7 @@ Enforces:
 8. Related files from codebase knowledge (v8.0 - co-change patterns)
 9. Smart read suggestions (v8.0 Phase 10 - RLM-inspired)
 10. Self-clarification prompts (v8.0 Phase 10.3 - RLM-inspired stuck detection)
+11. Context compression offers (v8.0 Phase 10.1 - RLM-inspired active compression)
 
 v7.0 Paradigm Shift:
 - LESSONS → became RULES (enforcement, not suggestion)
@@ -404,6 +405,37 @@ def check_self_clarification():
     return ""
 
 
+def check_context_compression():
+    """
+    v8.0 Phase 10.1: Check if context compression should be offered.
+
+    RLM-inspired: Don't just warn about high context - actively compress it.
+    Identifies large segments (file reads, bash outputs) and offers compression.
+
+    Returns formatted compression offer (or empty if not needed).
+    """
+    try:
+        from context_compressor import check_and_offer_compression
+
+        # Get intervention level for filtering
+        intervention_level = "advise"  # Default
+        try:
+            from active_intervention import get_current_level
+            intervention_level = get_current_level()
+        except ImportError:
+            pass
+
+        compression_offer = check_and_offer_compression(intervention_level)
+        return compression_offer or ""
+
+    except ImportError:
+        pass  # Context compressor not available
+    except Exception:
+        pass  # Don't fail the hook
+
+    return ""
+
+
 def surface_file_context(tool_name, tool_input):
     """
     v7.0: Surface file context at decision time.
@@ -575,6 +607,12 @@ def main():
     clarification = check_self_clarification()
     if clarification:
         print(clarification, file=sys.stderr)
+
+    # Check 11: Context compression (v8.0 Phase 10.1)
+    # RLM-inspired: Don't just warn about high context - actively compress it
+    compression_offer = check_context_compression()
+    if compression_offer:
+        print(compression_offer, file=sys.stderr)
 
     # v7.0: Log surface event for outcome tracking
     if rules_fired or context_shown:

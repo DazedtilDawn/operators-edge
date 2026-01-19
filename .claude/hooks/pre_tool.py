@@ -12,6 +12,7 @@ Enforces:
 6. File context surfacing (v7.0 - related files, risks)
 7. Context window monitoring (v8.0 - context engineering)
 8. Related files from codebase knowledge (v8.0 - co-change patterns)
+9. Smart read suggestions (v8.0 Phase 10 - RLM-inspired)
 
 v7.0 Paradigm Shift:
 - LESSONS → became RULES (enforcement, not suggestion)
@@ -23,6 +24,7 @@ v8.0 Context Engineering:
 - Codebase knowledge: Surface files that usually change together
 - Smart suggestions: Proactive guidance based on context (Phase 6)
 - Active intervention: Escalating intervention based on session health (Phase 8)
+- Smart read: Suggest targeted file reads for large files (Phase 10)
 - This is supervision, not training
 
 Note: YOLO/Dispatch mode is handled by the /edge-yolo command orchestration,
@@ -331,6 +333,44 @@ def check_active_intervention(tool_name, tool_input):
     return "", False
 
 
+def check_smart_read(tool_name, tool_input):
+    """
+    v8.0 Phase 10: Smart read suggestions for large files.
+
+    RLM-inspired: Instead of reading entire large files into context,
+    suggest targeted approaches using REPL capabilities.
+
+    Returns formatted suggestion string (or empty if not applicable).
+    """
+    if tool_name != "Read":
+        return ""
+
+    file_path = tool_input.get("file_path", "")
+    if not file_path:
+        return ""
+
+    try:
+        from smart_read import check_read_and_suggest
+
+        # Get intervention level for formatting
+        intervention_level = "advise"  # Default
+        try:
+            from active_intervention import get_current_level
+            intervention_level = get_current_level()
+        except ImportError:
+            pass
+
+        suggestion = check_read_and_suggest(file_path, intervention_level)
+        return suggestion or ""
+
+    except ImportError:
+        pass  # Smart read not available
+    except Exception:
+        pass  # Don't fail the hook
+
+    return ""
+
+
 def surface_file_context(tool_name, tool_input):
     """
     v7.0: Surface file context at decision time.
@@ -490,6 +530,12 @@ def main():
         print(intervention_text, file=sys.stderr)
     if should_block:
         respond("block", "Active intervention: Command blocked based on session health. See warning above.")
+
+    # Check 9: Smart read suggestions (v8.0 Phase 10)
+    # RLM-inspired: Suggest targeted file reads for large files
+    smart_read_suggestion = check_smart_read(tool_name, tool_input)
+    if smart_read_suggestion:
+        print(smart_read_suggestion, file=sys.stderr)
 
     # v7.0: Log surface event for outcome tracking
     if rules_fired or context_shown:

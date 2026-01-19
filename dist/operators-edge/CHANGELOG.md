@@ -226,89 +226,39 @@ Claude already has grep/head/tail access but doesn't always use it proactively.
 - 39 tests
 
 ### Phase 10.4: Auto-Checkpoint (`auto_checkpoint.py`) ✓
-**Purpose:** RLM-inspired - generate compressed checkpoints at natural breakpoints
+**Purpose:** RLM-inspired - offer checkpoints at natural breakpoints for session continuity
 
-**The Problem:** Sessions drift and context fills up without structured stopping points.
-Handoffs lose continuity or carry too much baggage. No proactive checkpoint suggestions.
+**The Problem:** Sessions run long without natural stopping points. Context accumulates
+without compression. No structured handoff when context gets high.
 
-**The Solution:** Detect natural breakpoints and offer checkpoint/compaction:
+**The Solution:** Detect natural breakpoints and offer checkpoints:
 
 **Breakpoint Detection:**
-- **Time threshold**: 30+ minutes of session activity
-- **Tool calls threshold**: 50+ tool calls
-- **Context threshold**: 60%+ context usage (urgent at 80%+)
-- **Git commits**: Natural breakpoint after every commit
-- **Step completion**: Detects "step complete", "tests passing", etc.
-- **Error resolution**: After resolving 3+ errors
+- **Step Complete**: Always a natural checkpoint opportunity
+- **Error Resolution**: After resolving 3+ errors in session
+- **Time Thresholds**: 30 min (suggestion), 45 min (recommended), 60 min (critical)
+- **Activity Thresholds**: Every 50 tool calls
 
-**Checkpoint Generation:**
-- Extracts accomplishments from session log (commits, test passes)
-- Extracts files modified (unique filenames)
-- Extracts pending items from state plan
-- Records session metrics (context %, duration, tool calls)
-- Saves to `.proof/checkpoints/` for retrieval
+**Checkpoint Contents:**
+- Session metrics (duration, tool calls, errors, files modified)
+- Trigger type (step_complete, time, error_resolved, manual)
+- Context usage percentage
+- Formatted offers with urgency-based styling
 
-**Compaction Offers:**
-- Urgency levels: suggestion, recommendation, urgent
-- Formatted summary with accomplished/pending/metrics
-- Includes compaction advice for context management
-
-**Hardening (Flaw Remediation):**
-- **Cooldown System**: 10-minute cooldown between offers (prevents spam)
-- **Config Loading**: Thresholds loadable from `v8_config.json`
-- **Defensive Git Parsing**: Locale-agnostic commit message extraction
-- **Debug Logging**: Errors logged to `.proof/debug.log` (not stderr)
-- **Import Documentation**: Deferred imports documented for circular dep safety
+**Session State Tracking:**
+- `init_session()`: Initialize session state
+- `record_tool_call()`: Track tool calls and file modifications
+- `record_error()` / `record_error_resolved()`: Track error lifecycle
+- State persisted to `.proof/checkpoint_state.json`
 
 **Integration:**
-- `post_tool.py`: Checks for breakpoints after Edit/Write/Bash
-- Respects active intervention level for formatting
-- Checkpoints stored for session continuity
+- `session_start.py`: Initialize session state at start
+- `post_tool.py`: Track tools, errors, check for breakpoints
 
-- 57 tests
-
-### Phase 10.3: Self-Clarification (`self_clarify.py`) ✓
-**Purpose:** RLM-inspired - when stuck, force stepping back to clarify the actual problem
-
-**The Problem:** Claude gets stuck in loops (editing same file repeatedly, same errors,
-ignored drift signals). The "try same thing again" anti-pattern wastes context and time.
-
-**The Solution:** Detect "stuck" patterns and inject clarification prompts:
-
-**Stuck Pattern Detection:**
-- **Drift Ignored**: 3+ drift signals fired without action
-- **Error Repeat**: Same error message 3+ times (line numbers normalized)
-- **File Loop**: Same file edited 5+ times
-- **Tool Loop**: Alternating tool patterns with high failure rate
-
-**Clarification Prompts:**
-- Surfaces recent actions summary
-- Lists recent errors
-- Shows files being edited repeatedly
-- Forces articulating:
-  - What is the ACTUAL problem being solved?
-  - Why haven't previous attempts worked?
-  - What would success look like?
-
-**Cooldown System:**
-- 15-minute cooldown between clarification prompts
-- Prevents nagging/fatigue
-- Configurable via `v8_config.json`
-
-**Severity Levels:**
-- **suggestion**: Mild patterns detected (advise level filters these)
-- **recommendation**: Moderate patterns (2+ moderate or 1 severe)
-- **urgent**: Severe patterns (multiple issues compounding)
-
-**Integration:**
-- `pre_tool.py`: Check 10 - surfaces clarification before tool execution
-- Respects active intervention level for filtering
-- Logged to `.proof/clarifications.jsonl` for analysis
-
-- 45 tests
+- 28 tests
 
 ### Test Coverage
-- 466+ new tests for v8.0:
+- 392 new tests for v8.0:
   - Phase 1 (drift): 24 tests
   - Phase 2 (context): 33 tests
   - Phase 3 (knowledge): 31 tests
@@ -319,9 +269,8 @@ ignored drift signals). The "try same thing again" anti-pattern wastes context a
   - Phase 8 (intervention): 41 tests
   - Phase 9 (outcomes): 51 tests
   - Phase 10.2 (smart read): 39 tests
-  - Phase 10.3 (self-clarify): 45 tests
-  - Phase 10.4 (auto-checkpoint): 57 tests
-- Total core tests: 575+
+  - Phase 10.4 (auto-checkpoint): 28 tests
+- Total core tests: 530+
 
 ---
 

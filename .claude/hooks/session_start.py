@@ -319,6 +319,15 @@ def main():
     # Initialize proof session (session-scoped logs with symlink)
     initialize_proof_session(session_id)
 
+    # v8.0 Phase 10: Initialize auto-checkpoint session tracking
+    try:
+        from auto_checkpoint import init_session as init_checkpoint_session
+        init_checkpoint_session()
+    except ImportError:
+        pass  # Auto-checkpoint not available
+    except Exception:
+        pass  # Don't fail session start
+
     # Archive old session logs (retention policy: 7 days)
     try:
         archived = archive_old_sessions()
