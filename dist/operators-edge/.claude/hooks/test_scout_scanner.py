@@ -18,6 +18,8 @@ from unittest.mock import patch, MagicMock
 # Add hooks directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from scout_config import FindingType, FindingPriority
+
 
 class TestDiscoverFiles(unittest.TestCase):
     """Tests for discover_files() function."""
@@ -615,6 +617,103 @@ class TestExtractVerificationKeywords(unittest.TestCase):
         self.assertIn("login", keywords)
         self.assertIn("token", keywords)
         self.assertIn("string", keywords)
+
+
+class TestScanEvalFailures(unittest.TestCase):
+    """Tests for scan_eval_failures() function (v3.9.7)."""
+
+    @patch('eval_utils.load_eval_runs')
+    def test_no_failures_returns_empty(self, mock_load):
+        """Should return empty list when no invariants failed."""
+        from scout_scanner import scan_eval_failures
+        mock_load.return_value = [{"invariants_failed": []}]
+        findings = scan_eval_failures()
+        self.assertEqual(len(findings), 0)
+
+    @patch('eval_utils.load_eval_runs')
+    def test_no_runs_returns_empty(self, mock_load):
+        """Should return empty list when no eval runs exist."""
+        from scout_scanner import scan_eval_failures
+        mock_load.return_value = []
+        findings = scan_eval_failures()
+        self.assertEqual(len(findings), 0)
+
+    @patch('eval_utils.load_eval_runs')
+    def test_failure_creates_finding(self, mock_load):
+        """Should create a finding for each failed invariant."""
+        from scout_scanner import scan_eval_failures
+        mock_load.return_value = [{
+            "invariants_failed": ["INV-02"],
+            "tool": "Edit",
+            "timestamp": "2026-01-10T12:00:00",
+            "snapshots": {"diff": ".proof/evals/run-01/diff.json"},
+            "diff_summary": {"added": 1, "removed": 2, "changed": 0}
+        }]
+        findings = scan_eval_failures()
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].type, FindingType.EVAL_FAILURE)
+        self.assertEqual(findings[0].priority, FindingPriority.HIGH)
+        self.assertIn("INV-02", findings[0].title)
+        self.assertIn("Edit", findings[0].description)
+        self.assertEqual(findings[0].location, ".proof/evals/run-01/diff.json")
+
+    @patch('eval_utils.load_eval_runs')
+    def test_multiple_failures_in_single_run(self, mock_load):
+        """Should create multiple findings for multiple failures in one run."""
+        from scout_scanner import scan_eval_failures
+        mock_load.return_value = [{
+            "invariants_failed": ["INV-01", "INV-02"],
+            "tool": "Write",
+            "timestamp": "2026-01-10T12:00:00",
+            "snapshots": {},
+            "diff_summary": {}
+        }]
+        findings = scan_eval_failures()
+        self.assertEqual(len(findings), 2)
+        inv_ids = [f.title for f in findings]
+        self.assertTrue(any("INV-01" in t for t in inv_ids))
+        self.assertTrue(any("INV-02" in t for t in inv_ids))
+
+    @patch('eval_utils.load_eval_runs')
+    def test_multiple_runs_with_failures(self, mock_load):
+        """Should find failures across multiple runs."""
+        from scout_scanner import scan_eval_failures
+        mock_load.return_value = [
+            {"invariants_failed": ["INV-01"], "tool": "Edit", "snapshots": {}, "diff_summary": {}},
+            {"invariants_failed": [], "tool": "Read", "snapshots": {}, "diff_summary": {}},
+            {"invariants_failed": ["INV-02"], "tool": "Write", "snapshots": {}, "diff_summary": {}},
+        ]
+        findings = scan_eval_failures()
+        self.assertEqual(len(findings), 2)
+
+    @patch('eval_utils.load_eval_runs')
+    def test_context_includes_diff_summary(self, mock_load):
+        """Should include diff summary in context."""
+        from scout_scanner import scan_eval_failures
+        mock_load.return_value = [{
+            "invariants_failed": ["INV-02"],
+            "tool": "Edit",
+            "snapshots": {},
+            "diff_summary": {"added": 5, "removed": 3, "changed": 2}
+        }]
+        findings = scan_eval_failures()
+        self.assertEqual(len(findings), 1)
+        self.assertIn("+5", findings[0].context)
+        self.assertIn("-3", findings[0].context)
+        self.assertIn("~2", findings[0].context)
+
+    @patch('eval_utils.load_eval_runs')
+    def test_handles_missing_fields_gracefully(self, mock_load):
+        """Should handle runs with missing optional fields."""
+        from scout_scanner import scan_eval_failures
+        mock_load.return_value = [{
+            "invariants_failed": ["INV-01"],
+            # Missing tool, timestamp, snapshots, diff_summary
+        }]
+        findings = scan_eval_failures()
+        self.assertEqual(len(findings), 1)
+        self.assertIn("INV-01", findings[0].title)
+        self.assertIn("unknown", findings[0].description)  # tool defaults to "unknown"
 
 
 if __name__ == '__main__':

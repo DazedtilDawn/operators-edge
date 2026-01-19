@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Nebula Clusters - Visualization Concept</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0d1117;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            overflow: hidden;
+        }
+        #container {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+        }
+        .title {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #c9d1d9;
+            z-index: 100;
+        }
+        .title h1 {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        .title p {
+            font-size: 14px;
+            color: #8b949e;
+        }
+        .controls {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            display: flex;
+            gap: 12px;
+            z-index: 100;
+        }
+        .controls button {
+            background: #21262d;
+            border: 1px solid #30363d;
+            color: #c9d1d9;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+        .controls button:hover {
+            background: #30363d;
+            border-color: #8b949e;
+        }
+        .controls button.active {
+            background: #238636;
+            border-color: #2ea043;
+        }
+        .legend {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(22, 27, 34, 0.9);
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 16px;
+            color: #c9d1d9;
+            font-size: 13px;
+            z-index: 100;
+        }
+        .legend h3 {
+            margin-bottom: 12px;
+            font-size: 14px;
+            color: #8b949e;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        .legend-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+        svg {
+            display: block;
+        }
+        .node-label {
+            font-size: 11px;
+            fill: #c9d1d9;
+            pointer-events: none;
+            text-shadow: 0 0 4px #0d1117, 0 0 8px #0d1117;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div class="title">
+            <h1>Nebula Clusters</h1>
+            <p>Drag nodes to see organic cluster boundaries respond</p>
+        </div>
+        <div class="legend">
+            <h3>Clusters by Cohesion</h3>
+            <div class="legend-item">
+                <div class="legend-dot" style="background: #ff6b6b;"></div>
+                <span>High activity core</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-dot" style="background: #4ecdc4;"></div>
+                <span>Connected utilities</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-dot" style="background: #ffe66d;"></div>
+                <span>Config cluster</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-dot" style="background: #7b6d8d;"></div>
+                <span>Supporting files</span>
+            </div>
+        </div>
+        <div class="controls">
+            <button id="toggle-nebula" class="active">Nebula On</button>
+            <button id="toggle-breathing">Breathing On</button>
+            <button id="reset">Reset Layout</button>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+
+        // Curated color palette - harmonious, gallery-worthy
+        const clusterColors = [
+            '#ff6b6b',  // Warm coral - active/important
+            '#4ecdc4',  // Sage teal - connected
+            '#ffe66d',  // Soft gold - highlighted
+            '#7b6d8d',  // Muted lavender - supporting
+            '#1a535c',  // Deep teal - stable
+        ];
+
+        // Sample data - simulating a code graph
+        const nodes = [
+            // Cluster 0: Core activity (coral)
+            { id: 'proof_visualizer.py', cluster: 0, size: 20 },
+            { id: 'edge_server.py', cluster: 0, size: 14 },
+            { id: 'story_mode.js', cluster: 0, size: 12 },
+
+            // Cluster 1: Utilities (teal)
+            { id: 'state_utils.py', cluster: 1, size: 16 },
+            { id: 'edge_utils.py', cluster: 1, size: 14 },
+            { id: 'archive_utils.py', cluster: 1, size: 10 },
+            { id: 'prune_utils.py', cluster: 1, size: 10 },
+
+            // Cluster 2: Config (gold)
+            { id: 'active_context.yaml', cluster: 2, size: 18 },
+            { id: 'settings.json', cluster: 2, size: 8 },
+            { id: 'CLAUDE.md', cluster: 2, size: 10 },
+
+            // Cluster 3: Supporting (lavender)
+            { id: 'pre_tool.py', cluster: 3, size: 12 },
+            { id: 'post_tool.py', cluster: 3, size: 12 },
+            { id: 'stop_gate.py', cluster: 3, size: 10 },
+            { id: 'session_start.py', cluster: 3, size: 8 },
+        ];
+
+        // Links based on co-occurrence
+        const links = [
+            // Within cluster 0
+            { source: 'proof_visualizer.py', target: 'edge_server.py' },
+            { source: 'proof_visualizer.py', target: 'story_mode.js' },
+            { source: 'edge_server.py', target: 'story_mode.js' },
+
+            // Within cluster 1
+            { source: 'state_utils.py', target: 'edge_utils.py' },
+            { source: 'state_utils.py', target: 'archive_utils.py' },
+            { source: 'edge_utils.py', target: 'prune_utils.py' },
+            { source: 'archive_utils.py', target: 'prune_utils.py' },
+
+            // Within cluster 2
+            { source: 'active_context.yaml', target: 'settings.json' },
+            { source: 'active_context.yaml', target: 'CLAUDE.md' },
+
+            // Within cluster 3
+            { source: 'pre_tool.py', target: 'post_tool.py' },
+            { source: 'post_tool.py', target: 'stop_gate.py' },
+            { source: 'pre_tool.py', target: 'session_start.py' },
+
+            // Cross-cluster connections
+            { source: 'proof_visualizer.py', target: 'state_utils.py' },
+            { source: 'edge_server.py', target: 'active_context.yaml' },
+            { source: 'state_utils.py', target: 'active_context.yaml' },
+            { source: 'post_tool.py', target: 'state_utils.py' },
+        ];
+
+        // Create SVG
+        const svg = d3.select('#container')
+            .append('svg')
+            .attr('width', width)
+            .attr('height', height);
+
+        // Defs for filters and gradients
+        const defs = svg.append('defs');
+
+        // Create radial gradients for each cluster
+        clusterColors.forEach((color, i) => {
+            const gradient = defs.append('radialGradient')
+                .attr('id', `nebula-gradient-${i}`)
+                .attr('cx', '50%').attr('cy', '50%')
+                .attr('r', '50%');
+
+            gradient.append('stop')
+                .attr('offset', '0%')
+                .attr('stop-color', color)
+                .attr('stop-opacity', 0.4);
+
+            gradient.append('stop')
+                .attr('offset', '50%')
+                .attr('stop-color', color)
+                .attr('stop-opacity', 0.15);
+
+            gradient.append('stop')
+                .attr('offset', '100%')
+                .attr('stop-color', color)
+                .attr('stop-opacity', 0);
+        });
+
+        // Glow filter for nodes
+        const glow = defs.append('filter')
+            .attr('id', 'node-glow')
+            .attr('x', '-50%').attr('y', '-50%')
+            .attr('width', '200%').attr('height', '200%');
+
+        glow.append('feGaussianBlur')
+            .attr('stdDeviation', '3')
+            .attr('result', 'blur');
+
+        glow.append('feMerge')
+            .selectAll('feMergeNode')
+            .data(['blur', 'SourceGraphic'])
+            .join('feMergeNode')
+            .attr('in', d => d);
+
+        // Soft blur for nebula
+        const nebulaBlur = defs.append('filter')
+            .attr('id', 'nebula-blur')
+            .attr('x', '-100%').attr('y', '-100%')
+            .attr('width', '300%').attr('height', '300%');
+
+        nebulaBlur.append('feGaussianBlur')
+            .attr('stdDeviation', '30');
+
+        // Create layers
+        const nebulaLayer = svg.append('g').attr('class', 'nebula-layer');
+        const linkLayer = svg.append('g').attr('class', 'link-layer');
+        const nodeLayer = svg.append('g').attr('class', 'node-layer');
+
+        // Force simulation
+        const simulation = d3.forceSimulation(nodes)
+            .force('link', d3.forceLink(links).id(d => d.id).distance(80))
+            .force('charge', d3.forceManyBody().strength(-300))
+            .force('center', d3.forceCenter(width / 2, height / 2))
+            .force('collision', d3.forceCollide().radius(d => d.size + 20))
+            .force('cluster', clusterForce(0.3));
+
+        // Custom cluster force - pulls nodes toward cluster centers
+        function clusterForce(strength) {
+            let nodes;
+
+            function force(alpha) {
+                const clusterCenters = {};
+                const clusterCounts = {};
+
+                // Calculate cluster centers
+                nodes.forEach(d => {
+                    if (!clusterCenters[d.cluster]) {
+                        clusterCenters[d.cluster] = { x: 0, y: 0 };
+                        clusterCounts[d.cluster] = 0;
+                    }
+                    clusterCenters[d.cluster].x += d.x;
+                    clusterCenters[d.cluster].y += d.y;
+                    clusterCounts[d.cluster]++;
+                });
+
+                Object.keys(clusterCenters).forEach(c => {
+                    clusterCenters[c].x /= clusterCounts[c];
+                    clusterCenters[c].y /= clusterCounts[c];
+                });
+
+                // Apply gentle pull toward cluster center
+                nodes.forEach(d => {
+                    const center = clusterCenters[d.cluster];
+                    d.vx += (center.x - d.x) * strength * alpha;
+                    d.vy += (center.y - d.y) * strength * alpha;
+                });
+            }
+
+            force.initialize = _ => nodes = _;
+            return force;
+        }
+
+        // Draw links
+        const link = linkLayer.selectAll('line')
+            .data(links)
+            .join('line')
+            .attr('stroke', '#30363d')
+            .attr('stroke-width', 1)
+            .attr('stroke-opacity', 0.6);
+
+        // Draw nebula blobs for each cluster
+        const clusterIds = [...new Set(nodes.map(d => d.cluster))];
+
+        const nebulae = nebulaLayer.selectAll('ellipse')
+            .data(clusterIds)
+            .join('ellipse')
+            .attr('fill', d => `url(#nebula-gradient-${d})`)
+            .attr('filter', 'url(#nebula-blur)')
+            .attr('opacity', 1);
+
+        // Draw nodes
+        const node = nodeLayer.selectAll('g')
+            .data(nodes)
+            .join('g')
+            .attr('class', 'node')
+            .call(d3.drag()
+                .on('start', dragstarted)
+                .on('drag', dragged)
+                .on('end', dragended));
+
+        node.append('circle')
+            .attr('r', d => d.size)
+            .attr('fill', d => clusterColors[d.cluster])
+            .attr('stroke', '#0d1117')
+            .attr('stroke-width', 2)
+            .attr('filter', 'url(#node-glow)');
+
+        node.append('text')
+            .attr('class', 'node-label')
+            .attr('dx', d => d.size + 6)
+            .attr('dy', 4)
+            .text(d => d.id.replace('.py', '').replace('.yaml', '').replace('.json', '').replace('.md', '').replace('.js', ''));
+
+        // Update positions on tick
+        simulation.on('tick', () => {
+            link
+                .attr('x1', d => d.source.x)
+                .attr('y1', d => d.source.y)
+                .attr('x2', d => d.target.x)
+                .attr('y2', d => d.target.y);
+
+            node.attr('transform', d => `translate(${d.x},${d.y})`);
+
+            // Update nebula positions and sizes
+            updateNebulae();
+        });
+
+        function updateNebulae() {
+            clusterIds.forEach(clusterId => {
+                const clusterNodes = nodes.filter(d => d.cluster === clusterId);
+
+                // Calculate bounding box with padding
+                const xs = clusterNodes.map(d => d.x);
+                const ys = clusterNodes.map(d => d.y);
+
+                const centerX = d3.mean(xs);
+                const centerY = d3.mean(ys);
+
+                // Calculate spread (standard deviation-ish)
+                const spreadX = Math.max(80, (d3.max(xs) - d3.min(xs)) / 2 + 60);
+                const spreadY = Math.max(80, (d3.max(ys) - d3.min(ys)) / 2 + 60);
+
+                nebulae.filter(d => d === clusterId)
+                    .attr('cx', centerX)
+                    .attr('cy', centerY)
+                    .attr('rx', spreadX * 1.5)
+                    .attr('ry', spreadY * 1.5);
+            });
+        }
+
+        // Drag functions
+        function dragstarted(event, d) {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            d.fx = d.x;
+            d.fy = d.y;
+        }
+
+        function dragged(event, d) {
+            d.fx = event.x;
+            d.fy = event.y;
+        }
+
+        function dragended(event, d) {
+            if (!event.active) simulation.alphaTarget(0);
+            d.fx = null;
+            d.fy = null;
+        }
+
+        // Breathing animation
+        let breathingEnabled = true;
+        let breathPhase = 0;
+
+        function breathe() {
+            if (breathingEnabled) {
+                breathPhase += 0.02;
+                const breathScale = 1 + Math.sin(breathPhase) * 0.03;
+                const breathOpacity = 0.8 + Math.sin(breathPhase) * 0.2;
+
+                nebulae
+                    .attr('transform', d => {
+                        const clusterNodes = nodes.filter(n => n.cluster === d);
+                        const centerX = d3.mean(clusterNodes.map(n => n.x));
+                        const centerY = d3.mean(clusterNodes.map(n => n.y));
+                        return `translate(${centerX}, ${centerY}) scale(${breathScale}) translate(${-centerX}, ${-centerY})`;
+                    })
+                    .attr('opacity', breathOpacity);
+            }
+            requestAnimationFrame(breathe);
+        }
+        breathe();
+
+        // Controls
+        let nebulaVisible = true;
+
+        d3.select('#toggle-nebula').on('click', function() {
+            nebulaVisible = !nebulaVisible;
+            nebulaLayer.style('display', nebulaVisible ? 'block' : 'none');
+            d3.select(this)
+                .classed('active', nebulaVisible)
+                .text(nebulaVisible ? 'Nebula On' : 'Nebula Off');
+        });
+
+        d3.select('#toggle-breathing').on('click', function() {
+            breathingEnabled = !breathingEnabled;
+            d3.select(this)
+                .classed('active', breathingEnabled)
+                .text(breathingEnabled ? 'Breathing On' : 'Breathing Off');
+            if (!breathingEnabled) {
+                nebulae.attr('transform', null).attr('opacity', 1);
+            }
+        });
+
+        d3.select('#reset').on('click', function() {
+            nodes.forEach(d => {
+                d.fx = null;
+                d.fy = null;
+            });
+            simulation.alpha(1).restart();
+        });
+
+        // Initial settle
+        simulation.alpha(1).restart();
+    </script>
+</body>
+</html>

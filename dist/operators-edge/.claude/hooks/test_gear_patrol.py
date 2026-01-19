@@ -383,7 +383,7 @@ class TestShouldTransitionFromPatrol:
         assert should is True
         assert transition == GearTransition.PATROL_TO_DREAM
 
-    def test_error_state_transitions_to_dream(self):
+    def test_error_state_does_not_transition(self):
         result = PatrolGearResult(
             scan_completed=False,
             findings_count=0,
@@ -395,8 +395,8 @@ class TestShouldTransitionFromPatrol:
         )
         gear_state = make_gear_state()
         should, transition = should_transition_from_patrol(result, gear_state)
-        assert should is True
-        assert transition == GearTransition.PATROL_TO_DREAM
+        assert should is False
+        assert transition is None
 
 
 # =============================================================================

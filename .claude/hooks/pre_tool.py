@@ -10,11 +10,20 @@ Enforces:
 4. Plan requirement for file edits
 5. Graduated rules enforcement (v7.0 - proven lessons become rules)
 6. File context surfacing (v7.0 - related files, risks)
+7. Context window monitoring (v8.0 - context engineering)
+8. Related files from codebase knowledge (v8.0 - co-change patterns)
 
 v7.0 Paradigm Shift:
 - LESSONS → became RULES (enforcement, not suggestion)
 - PATTERNS → became CONTEXT (related files, not wisdom)
 - RHYTHM → removed (low value)
+
+v8.0 Context Engineering:
+- Context monitor: Track context usage, surface compression recommendations
+- Codebase knowledge: Surface files that usually change together
+- Smart suggestions: Proactive guidance based on context (Phase 6)
+- Active intervention: Escalating intervention based on session health (Phase 8)
+- This is supervision, not training
 
 Note: YOLO/Dispatch mode is handled by the /edge-yolo command orchestration,
 not by this hook. This hook only enforces safety constraints.
@@ -174,6 +183,154 @@ def check_graduated_rules(tool_name, tool_input):
     return None, None, rules_fired
 
 
+def check_context_window():
+    """
+    v8.0: Check context window usage and surface warnings if high.
+
+    This is context engineering - supervision to prevent context exhaustion.
+    Surfaces warnings at 60%+, compression recommendations at 75%+.
+
+    Returns intervention string to print (or empty string if none needed).
+    """
+    try:
+        from context_monitor import (
+            check_context_and_recommend,
+            format_context_intervention
+        )
+        from proof_utils import get_session_log_path
+
+        session_log = get_session_log_path()
+        if not session_log or not session_log.exists():
+            return ""
+
+        state = load_yaml_state() or {}
+        estimate, recommendation = check_context_and_recommend(session_log, state)
+
+        # v8.0 Phase 5: Record context usage in metrics
+        try:
+            from session_metrics import record_context_usage
+            record_context_usage(
+                usage_percent=estimate.usage_percentage * 100,
+                recommended_compression=recommendation.should_compress
+            )
+        except ImportError:
+            pass
+
+        # Only surface warnings and above
+        if recommendation.severity in ("warning", "critical"):
+            return format_context_intervention(recommendation, estimate)
+
+    except ImportError:
+        pass  # Context monitor not available
+    except Exception:
+        pass  # Don't fail the hook if context check fails
+
+    return ""
+
+
+def get_smart_suggestions(tool_name, tool_input, known_fix=None):
+    """
+    v8.0 Phase 6: Get smart suggestions for this tool call.
+
+    Proactive guidance based on:
+    - Auto-fix offers for known errors
+    - Related file warnings
+    - Checkpoint reminders
+    - Drift prevention
+    - Pattern nudges
+
+    Returns formatted string to print (or empty string if none).
+    """
+    try:
+        from smart_suggestions import get_suggestions_for_tool
+        from proof_utils import get_session_log_path
+
+        session_log = get_session_log_path()
+        state = load_yaml_state() or {}
+
+        return get_suggestions_for_tool(
+            tool_name=tool_name,
+            tool_input=tool_input,
+            state=state,
+            session_log=session_log,
+            known_fix=known_fix
+        )
+
+    except ImportError:
+        pass  # Smart suggestions not available
+    except Exception:
+        pass  # Don't fail the hook
+
+    return ""
+
+
+def surface_related_files_from_knowledge(tool_name, tool_input):
+    """
+    v8.0: Surface related files from codebase knowledge.
+
+    This uses the co-change patterns learned from past sessions.
+    If file A and file B have been modified together before,
+    when editing A we remind Claude about B.
+
+    Returns string to print (or empty if none).
+    """
+    if tool_name not in ("Edit", "Write", "NotebookEdit"):
+        return ""
+
+    file_path = tool_input.get("file_path", "")
+    if not file_path:
+        return ""
+
+    # Skip internal paths
+    safe_paths = ["active_context.yaml", ".proof/", "checklist.md", "archive.md"]
+    if any(safe in file_path for safe in safe_paths):
+        return ""
+
+    try:
+        from codebase_knowledge import get_related_files, format_related_files
+
+        relations = get_related_files(file_path, min_strength=0.4)
+        if relations:
+            return format_related_files(relations)
+
+    except ImportError:
+        pass  # Codebase knowledge not available
+    except Exception:
+        pass  # Don't fail the hook
+
+    return ""
+
+
+def check_active_intervention(tool_name, tool_input):
+    """
+    v8.0 Phase 8: Check if active intervention system has guidance or blocks.
+
+    The intervention level escalates based on session health:
+    - observe: No intervention, just tracking
+    - advise: Surface context, suggestions (default)
+    - guide: Inject known fixes prominently, proactive warnings
+    - intervene: Can block dangerous commands, strong guidance
+
+    Returns (intervention_text, should_block) tuple.
+    """
+    try:
+        from active_intervention import get_intervention_for_tool
+
+        intervention_text, should_block = get_intervention_for_tool(
+            tool_name=tool_name,
+            tool_input=tool_input
+        )
+
+        return intervention_text, should_block
+
+    except ImportError:
+        pass  # Active intervention not available
+    except Exception:
+        pass  # Don't fail the hook
+
+    return "", False
+
+
 def surface_file_context(tool_name, tool_input):
     """
     v7.0: Surface file context at decision time.
@@ -307,6 +464,32 @@ def main():
     file_context, context_shown = surface_file_context(tool_name, tool_input)
     if file_context:
         print(f"\n{file_context}\n", file=sys.stderr)
+
+    # Check 5: Context window monitoring (v8.0)
+    # Supervision to prevent context exhaustion
+    context_warning = check_context_window()
+    if context_warning:
+        print(context_warning, file=sys.stderr)
+
+    # Check 6: Related files from codebase knowledge (v8.0)
+    # Surface files that have been modified together in past sessions
+    related_files = surface_related_files_from_knowledge(tool_name, tool_input)
+    if related_files:
+        print(related_files, file=sys.stderr)
+
+    # Check 7: Smart suggestions (v8.0 Phase 6)
+    # Proactive guidance based on context, patterns, and known fixes
+    smart_suggestions = get_smart_suggestions(tool_name, tool_input)
+    if smart_suggestions:
+        print(smart_suggestions, file=sys.stderr)
+
+    # Check 8: Active intervention (v8.0 Phase 8)
+    # Escalating intervention based on session health
+    intervention_text, should_block = check_active_intervention(tool_name, tool_input)
+    if intervention_text:
+        print(intervention_text, file=sys.stderr)
+    if should_block:
+        respond("block", "Active intervention: Command blocked based on session health. See warning above.")
 
     # v7.0: Log surface event for outcome tracking
     if rules_fired or context_shown:

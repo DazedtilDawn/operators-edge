@@ -26,12 +26,15 @@ from dispatch_config import DispatchState, JunctionType
 class TestLoadDispatchState(unittest.TestCase):
     """Tests for load_dispatch_state() function."""
 
+    @patch('dispatch_utils.load_yaml_state')
     @patch('dispatch_utils.get_state_dir')
     @patch('dispatch_utils.get_default_dispatch_state')
     @patch('dispatch_utils.get_default_scout_state')
-    def test_loads_existing_state(self, mock_scout, mock_default, mock_state_dir):
-        """load_dispatch_state() should load from file if exists."""
+    def test_loads_existing_state(self, mock_scout, mock_default, mock_state_dir, mock_load_yaml):
+        """load_dispatch_state() should load from JSON file if exists (fallback)."""
         from dispatch_utils import load_dispatch_state
+
+        mock_load_yaml.return_value = None  # Force JSON fallback
 
         with tempfile.TemporaryDirectory() as tmpdir:
             mock_state_dir.return_value = Path(tmpdir)
@@ -44,12 +47,15 @@ class TestLoadDispatchState(unittest.TestCase):
             self.assertTrue(result["enabled"])
             self.assertEqual(result["iteration"], 5)
 
+    @patch('dispatch_utils.load_yaml_state')
     @patch('dispatch_utils.get_state_dir')
     @patch('dispatch_utils.get_default_dispatch_state')
     @patch('dispatch_utils.get_default_scout_state')
-    def test_returns_default_if_missing(self, mock_scout, mock_default, mock_state_dir):
+    def test_returns_default_if_missing(self, mock_scout, mock_default, mock_state_dir, mock_load_yaml):
         """load_dispatch_state() should return default if file missing."""
         from dispatch_utils import load_dispatch_state
+
+        mock_load_yaml.return_value = None  # Force JSON fallback
 
         with tempfile.TemporaryDirectory() as tmpdir:
             mock_state_dir.return_value = Path(tmpdir)
@@ -60,12 +66,15 @@ class TestLoadDispatchState(unittest.TestCase):
 
             self.assertEqual(result["enabled"], False)
 
+    @patch('dispatch_utils.load_yaml_state')
     @patch('dispatch_utils.get_state_dir')
     @patch('dispatch_utils.get_default_dispatch_state')
     @patch('dispatch_utils.get_default_scout_state')
-    def test_adds_scout_state_if_missing(self, mock_scout, mock_default, mock_state_dir):
+    def test_adds_scout_state_if_missing(self, mock_scout, mock_default, mock_state_dir, mock_load_yaml):
         """load_dispatch_state() should add scout state if missing."""
         from dispatch_utils import load_dispatch_state
+
+        mock_load_yaml.return_value = None  # Force JSON fallback
 
         with tempfile.TemporaryDirectory() as tmpdir:
             mock_state_dir.return_value = Path(tmpdir)
@@ -82,10 +91,13 @@ class TestLoadDispatchState(unittest.TestCase):
 class TestSaveDispatchState(unittest.TestCase):
     """Tests for save_dispatch_state() function."""
 
+    @patch('dispatch_utils.load_yaml_state')
     @patch('dispatch_utils.get_state_dir')
-    def test_saves_state_to_file(self, mock_state_dir):
-        """save_dispatch_state() should write state to file."""
+    def test_saves_state_to_file(self, mock_state_dir, mock_load_yaml):
+        """save_dispatch_state() should write state to file (JSON fallback)."""
         from dispatch_utils import save_dispatch_state
+
+        mock_load_yaml.return_value = None  # Force JSON fallback
 
         with tempfile.TemporaryDirectory() as tmpdir:
             mock_state_dir.return_value = Path(tmpdir)
@@ -99,10 +111,13 @@ class TestSaveDispatchState(unittest.TestCase):
             self.assertTrue(content["enabled"])
             self.assertEqual(content["iteration"], 10)
 
+    @patch('dispatch_utils.load_yaml_state')
     @patch('dispatch_utils.get_state_dir')
-    def test_creates_directory_if_missing(self, mock_state_dir):
+    def test_creates_directory_if_missing(self, mock_state_dir, mock_load_yaml):
         """save_dispatch_state() should create directory if needed."""
         from dispatch_utils import save_dispatch_state
+
+        mock_load_yaml.return_value = None  # Force JSON fallback
 
         with tempfile.TemporaryDirectory() as tmpdir:
             state_dir = Path(tmpdir) / "subdir"
@@ -367,28 +382,36 @@ class TestDispatchFlowFunctions(unittest.TestCase):
         self.assertEqual(result["state"], DispatchState.IDLE.value)
         mock_save.assert_called()
 
+    @patch('dispatch_utils.set_pending_junction')
     @patch('dispatch_utils.save_dispatch_state')
-    def test_pause_at_junction(self, mock_save):
-        """pause_at_junction() should set junction state."""
+    def test_pause_at_junction(self, mock_save, mock_set_pending):
+        """pause_at_junction() should set junction state and write to junction_state.json."""
         from dispatch_utils import pause_at_junction
 
         state = {"stats": {}}
+        # Return tuple (pending, warning) - new signature
+        mock_set_pending.return_value = ({"id": "test-junction"}, None)
         pause_at_junction(state, JunctionType.IRREVERSIBLE, "Push detected")
 
+        # v5.1: State transitions to JUNCTION, but junction data is only in junction_state.json
         self.assertEqual(state["state"], DispatchState.JUNCTION.value)
-        self.assertIsNotNone(state["junction"])
-        self.assertEqual(state["junction"]["type"], JunctionType.IRREVERSIBLE.value)
+        # v5.1: Verify set_pending_junction was called (junction is in junction_state.json)
+        mock_set_pending.assert_called_once()
 
+    @patch('dispatch_utils.clear_pending_junction')
     @patch('dispatch_utils.save_dispatch_state')
-    def test_resume_from_junction(self, mock_save):
-        """resume_from_junction() should clear junction."""
+    def test_resume_from_junction(self, mock_save, mock_clear):
+        """resume_from_junction() should clear junction and set running state."""
         from dispatch_utils import resume_from_junction
 
-        state = {"junction": {"type": "test"}}
+        # v5.1: Junction is only in junction_state.json, not dispatch_state
+        state = {"state": DispatchState.JUNCTION.value}
+        # Return tuple (cleared, warning) - new signature
+        mock_clear.return_value = ({"type": "test"}, None)
         resume_from_junction(state)
 
+        # v5.1: Only check state transition, junction is cleared via junction_state.json
         self.assertEqual(state["state"], DispatchState.RUNNING.value)
-        self.assertIsNone(state["junction"])
 
     @patch('dispatch_utils.save_dispatch_state')
     def test_mark_complete(self, mock_save):
@@ -417,10 +440,12 @@ class TestGetDispatchStatus(unittest.TestCase):
 
     @patch('dispatch_utils.load_yaml_state')
     @patch('dispatch_utils.load_dispatch_state')
-    def test_returns_status_dict(self, mock_dispatch, mock_yaml):
+    @patch('dispatch_utils.get_pending_junction')
+    def test_returns_status_dict(self, mock_pending, mock_dispatch, mock_yaml):
         """get_dispatch_status() should return complete status."""
         from dispatch_utils import get_dispatch_status
 
+        mock_pending.return_value = None
         mock_dispatch.return_value = {
             "enabled": True,
             "state": "running",

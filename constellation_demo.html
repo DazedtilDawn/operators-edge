@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Constellation Mode - Code as Cosmos</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #000000;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            overflow: hidden;
+        }
+        #container {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+        }
+        #stars-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+        }
+        .title {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: rgba(255, 255, 255, 0.7);
+            z-index: 100;
+        }
+        .title h1 {
+            font-size: 24px;
+            font-weight: 300;
+            letter-spacing: 4px;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+        .title p {
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.4);
+            font-weight: 300;
+        }
+        .controls {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            display: flex;
+            gap: 12px;
+            z-index: 100;
+        }
+        .controls button {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: rgba(255, 255, 255, 0.6);
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 300;
+            letter-spacing: 1px;
+            transition: all 0.3s ease;
+        }
+        .controls button:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: rgba(255, 255, 255, 0.3);
+            color: rgba(255, 255, 255, 0.9);
+        }
+        .controls button.active {
+            background: rgba(255, 255, 255, 0.15);
+            border-color: rgba(255, 255, 255, 0.4);
+            color: #fff;
+        }
+        .cluster-info {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 20px;
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 13px;
+            z-index: 100;
+            min-width: 200px;
+            opacity: 0;
+            transform: translateY(-10px);
+            transition: all 0.3s ease;
+            pointer-events: none;
+        }
+        .cluster-info.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .cluster-info h3 {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: rgba(255, 255, 255, 0.4);
+            margin-bottom: 12px;
+        }
+        .cluster-info .cluster-name {
+            font-size: 18px;
+            font-weight: 300;
+            margin-bottom: 16px;
+        }
+        .cluster-info .files {
+            font-size: 12px;
+            line-height: 1.8;
+            color: rgba(255, 255, 255, 0.5);
+        }
+        .cluster-info .files span {
+            display: block;
+        }
+        svg {
+            display: block;
+        }
+        .node-label {
+            font-size: 10px;
+            fill: rgba(255, 255, 255, 0.5);
+            pointer-events: none;
+            font-weight: 300;
+            letter-spacing: 0.5px;
+            transition: all 0.3s ease;
+        }
+        .node-label.highlight {
+            fill: rgba(255, 255, 255, 0.9);
+        }
+        .node-label.dim {
+            fill: rgba(255, 255, 255, 0.15);
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <canvas id="stars-canvas"></canvas>
+        <div class="title">
+            <h1>Constellation</h1>
+            <p>Hover clusters to reveal structure</p>
+        </div>
+        <div class="cluster-info" id="cluster-info">
+            <h3>Cluster</h3>
+            <div class="cluster-name" id="cluster-name">-</div>
+            <div class="files" id="cluster-files"></div>
+        </div>
+        <div class="controls">
+            <button id="toggle-particles" class="active">Stars</button>
+            <button id="toggle-labels">Labels</button>
+            <button id="reset">Reset</button>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+
+        // Cluster definitions with poetic names
+        const clusterMeta = {
+            0: { name: 'The Core', color: '#ffffff', desc: 'Central visualization engine' },
+            1: { name: 'The Utilities', color: '#88c0d0', desc: 'Supporting functions' },
+            2: { name: 'The State', color: '#ebcb8b', desc: 'Configuration nexus' },
+            3: { name: 'The Watchers', color: '#b48ead', desc: 'Hook sentinels' },
+        };
+
+        // Sample data
+        const nodes = [
+            { id: 'proof_visualizer.py', cluster: 0, size: 6 },
+            { id: 'edge_server.py', cluster: 0, size: 5 },
+            { id: 'story_mode.js', cluster: 0, size: 4 },
+            { id: 'state_utils.py', cluster: 1, size: 5 },
+            { id: 'edge_utils.py', cluster: 1, size: 5 },
+            { id: 'archive_utils.py', cluster: 1, size: 3 },
+            { id: 'prune_utils.py', cluster: 1, size: 3 },
+            { id: 'active_context.yaml', cluster: 2, size: 6 },
+            { id: 'settings.json', cluster: 2, size: 3 },
+            { id: 'CLAUDE.md', cluster: 2, size: 4 },
+            { id: 'pre_tool.py', cluster: 3, size: 4 },
+            { id: 'post_tool.py', cluster: 3, size: 4 },
+            { id: 'stop_gate.py', cluster: 3, size: 3 },
+            { id: 'session_start.py', cluster: 3, size: 3 },
+        ];
+
+        const links = [
+            { source: 'proof_visualizer.py', target: 'edge_server.py' },
+            { source: 'proof_visualizer.py', target: 'story_mode.js' },
+            { source: 'edge_server.py', target: 'story_mode.js' },
+            { source: 'state_utils.py', target: 'edge_utils.py' },
+            { source: 'state_utils.py', target: 'archive_utils.py' },
+            { source: 'edge_utils.py', target: 'prune_utils.py' },
+            { source: 'archive_utils.py', target: 'prune_utils.py' },
+            { source: 'active_context.yaml', target: 'settings.json' },
+            { source: 'active_context.yaml', target: 'CLAUDE.md' },
+            { source: 'pre_tool.py', target: 'post_tool.py' },
+            { source: 'post_tool.py', target: 'stop_gate.py' },
+            { source: 'pre_tool.py', target: 'session_start.py' },
+            { source: 'proof_visualizer.py', target: 'state_utils.py' },
+            { source: 'edge_server.py', target: 'active_context.yaml' },
+            { source: 'state_utils.py', target: 'active_context.yaml' },
+            { source: 'post_tool.py', target: 'state_utils.py' },
+        ];
+
+        // ========================================
+        // STARFIELD BACKGROUND
+        // ========================================
+        const canvas = document.getElementById('stars-canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = width;
+        canvas.height = height;
+
+        const stars = [];
+        const numStars = 200;
+
+        for (let i = 0; i < numStars; i++) {
+            stars.push({
+                x: Math.random() * width,
+                y: Math.random() * height,
+                size: Math.random() * 1.5,
+                opacity: Math.random() * 0.5 + 0.1,
+                twinkleSpeed: Math.random() * 0.02 + 0.01,
+                twinklePhase: Math.random() * Math.PI * 2
+            });
+        }
+
+        let particlesEnabled = true;
+
+        function drawStars() {
+            ctx.clearRect(0, 0, width, height);
+
+            if (!particlesEnabled) {
+                requestAnimationFrame(drawStars);
+                return;
+            }
+
+            stars.forEach(star => {
+                star.twinklePhase += star.twinkleSpeed;
+                const twinkle = Math.sin(star.twinklePhase) * 0.3 + 0.7;
+
+                ctx.beginPath();
+                ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(255, 255, 255, ${star.opacity * twinkle})`;
+                ctx.fill();
+            });
+
+            requestAnimationFrame(drawStars);
+        }
+        drawStars();
+
+        // ========================================
+        // MAIN VISUALIZATION
+        // ========================================
+        const svg = d3.select('#container')
+            .append('svg')
+            .attr('width', width)
+            .attr('height', height);
+
+        const defs = svg.append('defs');
+
+        // Subtle glow filter for highlighted nodes
+        const glow = defs.append('filter')
+            .attr('id', 'star-glow')
+            .attr('x', '-100%').attr('y', '-100%')
+            .attr('width', '300%').attr('height', '300%');
+
+        glow.append('feGaussianBlur')
+            .attr('stdDeviation', '4')
+            .attr('result', 'blur');
+
+        glow.append('feMerge')
+            .selectAll('feMergeNode')
+            .data(['blur', 'SourceGraphic'])
+            .join('feMergeNode')
+            .attr('in', d => d);
+
+        // Nebula gradient for reveal on hover
+        Object.keys(clusterMeta).forEach(id => {
+            const color = clusterMeta[id].color;
+            const gradient = defs.append('radialGradient')
+                .attr('id', `nebula-${id}`)
+                .attr('cx', '50%').attr('cy', '50%').attr('r', '50%');
+
+            gradient.append('stop')
+                .attr('offset', '0%')
+                .attr('stop-color', color)
+                .attr('stop-opacity', 0.15);
+
+            gradient.append('stop')
+                .attr('offset', '70%')
+                .attr('stop-color', color)
+                .attr('stop-opacity', 0.05);
+
+            gradient.append('stop')
+                .attr('offset', '100%')
+                .attr('stop-color', color)
+                .attr('stop-opacity', 0);
+        });
+
+        // Layers
+        const nebulaLayer = svg.append('g').attr('class', 'nebula-layer');
+        const linkLayer = svg.append('g').attr('class', 'link-layer');
+        const nodeLayer = svg.append('g').attr('class', 'node-layer');
+
+        // Force simulation
+        const simulation = d3.forceSimulation(nodes)
+            .force('link', d3.forceLink(links).id(d => d.id).distance(100))
+            .force('charge', d3.forceManyBody().strength(-250))
+            .force('center', d3.forceCenter(width / 2, height / 2))
+            .force('collision', d3.forceCollide().radius(d => d.size + 30))
+            .force('cluster', clusterForce(0.15));
+
+        function clusterForce(strength) {
+            let nodes;
+            function force(alpha) {
+                const centers = {}, counts = {};
+                nodes.forEach(d => {
+                    if (!centers[d.cluster]) { centers[d.cluster] = {x:0,y:0}; counts[d.cluster] = 0; }
+                    centers[d.cluster].x += d.x;
+                    centers[d.cluster].y += d.y;
+                    counts[d.cluster]++;
+                });
+                Object.keys(centers).forEach(c => {
+                    centers[c].x /= counts[c];
+                    centers[c].y /= counts[c];
+                });
+                nodes.forEach(d => {
+                    const c = centers[d.cluster];
+                    d.vx += (c.x - d.x) * strength * alpha;
+                    d.vy += (c.y - d.y) * strength * alpha;
+                });
+            }
+            force.initialize = _ => nodes = _;
+            return force;
+        }
+
+        // Create nebulae (hidden by default)
+        const clusterIds = [...new Set(nodes.map(d => d.cluster))];
+        const nebulae = nebulaLayer.selectAll('ellipse')
+            .data(clusterIds)
+            .join('ellipse')
+            .attr('fill', d => `url(#nebula-${d})`)
+            .attr('opacity', 0)
+            .style('filter', 'blur(40px)')
+            .style('transition', 'opacity 0.5s ease');
+
+        // Draw links - thin, elegant constellation lines
+        const link = linkLayer.selectAll('line')
+            .data(links)
+            .join('line')
+            .attr('stroke', 'rgba(255, 255, 255, 0.15)')
+            .attr('stroke-width', 0.5)
+            .style('transition', 'all 0.3s ease');
+
+        // Draw nodes - crisp stars
+        const node = nodeLayer.selectAll('g')
+            .data(nodes)
+            .join('g')
+            .attr('class', 'node')
+            .style('cursor', 'pointer')
+            .call(d3.drag()
+                .on('start', dragstarted)
+                .on('drag', dragged)
+                .on('end', dragended));
+
+        // Outer glow (hidden by default)
+        node.append('circle')
+            .attr('class', 'node-glow')
+            .attr('r', d => d.size + 8)
+            .attr('fill', d => clusterMeta[d.cluster].color)
+            .attr('opacity', 0)
+            .style('filter', 'blur(8px)')
+            .style('transition', 'opacity 0.3s ease');
+
+        // Core star
+        node.append('circle')
+            .attr('class', 'node-core')
+            .attr('r', d => d.size)
+            .attr('fill', '#ffffff')
+            .style('transition', 'all 0.3s ease');
+
+        // Inner bright point
+        node.append('circle')
+            .attr('class', 'node-center')
+            .attr('r', d => d.size * 0.4)
+            .attr('fill', '#ffffff')
+            .attr('opacity', 0.9);
+
+        // Labels (hidden by default)
+        let labelsVisible = false;
+        const labels = node.append('text')
+            .attr('class', 'node-label')
+            .attr('dx', d => d.size + 8)
+            .attr('dy', 3)
+            .text(d => d.id.replace(/\.(py|yaml|json|md|js)$/, ''))
+            .attr('opacity', 0);
+
+        // ========================================
+        // INTERACTION - The Magic
+        // ========================================
+        let activeCluster = null;
+
+        node.on('mouseenter', function(event, d) {
+            activeCluster = d.cluster;
+            highlightCluster(d.cluster);
+            showClusterInfo(d.cluster);
+        });
+
+        node.on('mouseleave', function() {
+            activeCluster = null;
+            resetHighlight();
+            hideClusterInfo();
+        });
+
+        function highlightCluster(clusterId) {
+            // Reveal nebula for this cluster
+            nebulae.attr('opacity', d => d === clusterId ? 1 : 0);
+
+            // Highlight nodes in cluster
+            node.each(function(d) {
+                const isInCluster = d.cluster === clusterId;
+                d3.select(this).select('.node-glow')
+                    .attr('opacity', isInCluster ? 0.6 : 0);
+                d3.select(this).select('.node-core')
+                    .attr('fill', isInCluster ? clusterMeta[clusterId].color : '#ffffff')
+                    .attr('opacity', isInCluster ? 1 : 0.3);
+                d3.select(this).select('.node-label')
+                    .classed('highlight', isInCluster)
+                    .classed('dim', !isInCluster)
+                    .attr('opacity', isInCluster ? 1 : (labelsVisible ? 0.3 : 0));
+            });
+
+            // Highlight links within cluster
+            link.attr('stroke', l => {
+                const srcCluster = nodes.find(n => n.id === (l.source.id || l.source)).cluster;
+                const tgtCluster = nodes.find(n => n.id === (l.target.id || l.target)).cluster;
+                if (srcCluster === clusterId && tgtCluster === clusterId) {
+                    return clusterMeta[clusterId].color;
+                }
+                return 'rgba(255, 255, 255, 0.05)';
+            }).attr('stroke-width', l => {
+                const srcCluster = nodes.find(n => n.id === (l.source.id || l.source)).cluster;
+                const tgtCluster = nodes.find(n => n.id === (l.target.id || l.target)).cluster;
+                return (srcCluster === clusterId && tgtCluster === clusterId) ? 1.5 : 0.5;
+            }).attr('stroke-opacity', l => {
+                const srcCluster = nodes.find(n => n.id === (l.source.id || l.source)).cluster;
+                const tgtCluster = nodes.find(n => n.id === (l.target.id || l.target)).cluster;
+                return (srcCluster === clusterId && tgtCluster === clusterId) ? 0.8 : 0.3;
+            });
+        }
+
+        function resetHighlight() {
+            nebulae.attr('opacity', 0);
+
+            node.each(function(d) {
+                d3.select(this).select('.node-glow').attr('opacity', 0);
+                d3.select(this).select('.node-core')
+                    .attr('fill', '#ffffff')
+                    .attr('opacity', 1);
+                d3.select(this).select('.node-label')
+                    .classed('highlight', false)
+                    .classed('dim', false)
+                    .attr('opacity', labelsVisible ? 0.5 : 0);
+            });
+
+            link.attr('stroke', 'rgba(255, 255, 255, 0.15)')
+                .attr('stroke-width', 0.5)
+                .attr('stroke-opacity', 1);
+        }
+
+        function showClusterInfo(clusterId) {
+            const info = document.getElementById('cluster-info');
+            const meta = clusterMeta[clusterId];
+            const clusterNodes = nodes.filter(n => n.cluster === clusterId);
+
+            document.getElementById('cluster-name').textContent = meta.name;
+            document.getElementById('cluster-name').style.color = meta.color;
+            document.getElementById('cluster-files').innerHTML =
+                clusterNodes.map(n => `<span>${n.id}</span>`).join('');
+
+            info.classList.add('visible');
+        }
+
+        function hideClusterInfo() {
+            document.getElementById('cluster-info').classList.remove('visible');
+        }
+
+        // ========================================
+        // SIMULATION TICK
+        // ========================================
+        simulation.on('tick', () => {
+            link
+                .attr('x1', d => d.source.x)
+                .attr('y1', d => d.source.y)
+                .attr('x2', d => d.target.x)
+                .attr('y2', d => d.target.y);
+
+            node.attr('transform', d => `translate(${d.x},${d.y})`);
+
+            // Update nebula positions
+            clusterIds.forEach(clusterId => {
+                const clusterNodes = nodes.filter(d => d.cluster === clusterId);
+                const cx = d3.mean(clusterNodes, d => d.x);
+                const cy = d3.mean(clusterNodes, d => d.y);
+                const xs = clusterNodes.map(d => d.x);
+                const ys = clusterNodes.map(d => d.y);
+                const rx = Math.max(80, (d3.max(xs) - d3.min(xs)) / 2 + 80);
+                const ry = Math.max(80, (d3.max(ys) - d3.min(ys)) / 2 + 80);
+
+                nebulae.filter(d => d === clusterId)
+                    .attr('cx', cx)
+                    .attr('cy', cy)
+                    .attr('rx', rx)
+                    .attr('ry', ry);
+            });
+        });
+
+        // ========================================
+        // DRAG
+        // ========================================
+        function dragstarted(event, d) {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            d.fx = d.x;
+            d.fy = d.y;
+        }
+
+        function dragged(event, d) {
+            d.fx = event.x;
+            d.fy = event.y;
+        }
+
+        function dragended(event, d) {
+            if (!event.active) simulation.alphaTarget(0);
+            d.fx = null;
+            d.fy = null;
+        }
+
+        // ========================================
+        // CONTROLS
+        // ========================================
+        d3.select('#toggle-particles').on('click', function() {
+            particlesEnabled = !particlesEnabled;
+            d3.select(this).classed('active', particlesEnabled);
+            if (!particlesEnabled) {
+                ctx.clearRect(0, 0, width, height);
+            }
+        });
+
+        d3.select('#toggle-labels').on('click', function() {
+            labelsVisible = !labelsVisible;
+            d3.select(this).classed('active', labelsVisible);
+            labels.attr('opacity', labelsVisible ? 0.5 : 0);
+        });
+
+        d3.select('#reset').on('click', function() {
+            nodes.forEach(d => { d.fx = null; d.fy = null; });
+            simulation.alpha(1).restart();
+        });
+
+        // Initial settle
+        simulation.alpha(1).restart();
+    </script>
+</body>
+</html>

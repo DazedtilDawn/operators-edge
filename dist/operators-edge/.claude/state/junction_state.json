@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "pending": {
+    "id": "e14fc98f-0fda-49ab-9e8f-12592ca73eaa",
+    "type": "mode_transition",
+    "payload": {
+      "from": "active",
+      "to": "review",
+      "reason": "All 7 steps completed - ready for review"
+    },
+    "created_at": "2026-01-13T12:30:16.256769",
+    "source": "edge"
+  },
+  "history_tail": [
+    {
+      "id": "dbc74b30-36f8-4e26-bf52-9465ec8c4ab7",
+      "type": "finding_selection",
+      "decision": "approve",
+      "decided_at": "2026-01-12T07:42:09.877476"
+    },
+    {
+      "id": "415dbf14-0574-419d-a518-ee3b6ab78d40",
+      "type": "demo_junction",
+      "decision": "approve",
+      "decided_at": "2026-01-12T07:47:46.431338"
+    },
+    {
+      "id": "4a5b115a-6579-4592-9611-a106c7adca27",
+      "type": "test",
+      "decision": "approve",
+      "decided_at": "2026-01-13T08:12:25.183631"
+    },
+    {
+      "id": "ae1ca7b7-fc8b-41bb-9dea-fd0483d50be5",
+      "type": "finding_selection",
+      "decision": "skip",
+      "decided_at": "2026-01-13T08:24:56.679581"
+    },
+    {
+      "id": "7ad22812-84eb-48d2-95b9-c61cc6541499",
+      "type": "finding_selection",
+      "decision": "dismiss",
+      "decided_at": "2026-01-13T08:36:21.525613"
+    },
+    {
+      "id": "b97904e7-794a-42a4-9a31-8e891432101d",
+      "type": "complexity",
+      "decision": "dismiss",
+      "decided_at": "2026-01-13T08:39:39.623102"
+    },
+    {
+      "id": "b8364979-45dc-4dfc-af9c-a32884361284",
+      "type": "mode_transition",
+      "decision": "skip",
+      "decided_at": "2026-01-13T08:41:44.951757"
+    },
+    {
+      "id": "63fdc1b1-b4bf-4eaa-b671-1cbe196581b4",
+      "type": "mode_transition",
+      "decision": "approve",
+      "decided_at": "2026-01-13T11:03:38.870598"
+    },
+    {
+      "id": "cd8a2633-c66c-4f6f-b138-519734460389",
+      "type": "mode_transition",
+      "decision": "approve",
+      "decided_at": "2026-01-13T11:06:28.328174"
+    }
+  ],
+  "suppression": [
+    {
+      "fingerprint": "ace33e95ca96e4aafcffdba12ef3706052ea8a7c20cd8aa9152fe223dddd4c2d",
+      "expires_at": "2026-01-13T09:36:21.525630"
+    },
+    {
+      "fingerprint": "ae6c970922f53ec654a48280460363c090e5e05ad82964a4a086ec280bed6de6",
+      "expires_at": "2026-01-13T09:39:39.623120"
+    }
+  ]
+}

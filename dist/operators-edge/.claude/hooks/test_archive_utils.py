@@ -363,6 +363,86 @@ class TestIdentifyDecayedMemory(unittest.TestCase):
         self.assertEqual(len(decayed), 0)
 
 
+class TestProofGroundedDecay(unittest.TestCase):
+    """Tests for proof-grounded memory decay (v3.10.1)."""
+
+    @patch('archive_utils.get_memory_items')
+    @patch('archive_utils.MEMORY_SETTINGS', {
+        "decay_threshold_days": 14,
+        "reinforcement_threshold": 2,
+        "vitality_threshold": 1,
+        "vitality_lookback_days": 14
+    })
+    def test_vitality_protects_from_decay(self, mock_memory):
+        """Lessons with proof vitality should be protected from decay."""
+        from archive_utils import identify_decayed_memory
+
+        old_date = (datetime.now() - timedelta(days=20)).strftime('%Y-%m-%d')
+        mock_memory.return_value = [
+            {"trigger": "vital_lesson", "reinforced": 0, "last_used": old_date}
+        ]
+
+        # Mock check_lesson_vitality at the import location (proof_utils)
+        with patch('proof_utils.check_lesson_vitality') as mock_vitality:
+            mock_vitality.return_value = (True, "Proof shows 2 matches")
+
+            decayed = identify_decayed_memory({"memory": []})
+
+            # Lesson should NOT be decayed because proof shows vitality
+            self.assertEqual(len(decayed), 0)
+            mock_vitality.assert_called_once()
+
+    @patch('archive_utils.get_memory_items')
+    @patch('archive_utils.MEMORY_SETTINGS', {
+        "decay_threshold_days": 14,
+        "reinforcement_threshold": 2,
+        "vitality_threshold": 1,
+        "vitality_lookback_days": 14
+    })
+    def test_no_vitality_allows_decay(self, mock_memory):
+        """Lessons without proof vitality should still decay normally."""
+        from archive_utils import identify_decayed_memory
+
+        old_date = (datetime.now() - timedelta(days=20)).strftime('%Y-%m-%d')
+        mock_memory.return_value = [
+            {"trigger": "stale_lesson", "reinforced": 0, "last_used": old_date}
+        ]
+
+        # Mock check_lesson_vitality at the import location (proof_utils)
+        with patch('proof_utils.check_lesson_vitality') as mock_vitality:
+            mock_vitality.return_value = (False, "No proof vitality")
+
+            decayed = identify_decayed_memory({"memory": []})
+
+            # Lesson should be decayed
+            self.assertEqual(len(decayed), 1)
+            self.assertEqual(decayed[0][0]["trigger"], "stale_lesson")
+
+    @patch('archive_utils.get_memory_items')
+    @patch('archive_utils.MEMORY_SETTINGS', {
+        "decay_threshold_days": 14,
+        "reinforcement_threshold": 2,
+        "vitality_threshold": 1,
+        "vitality_lookback_days": 14
+    })
+    def test_vitality_check_graceful_on_import_error(self, mock_memory):
+        """identify_decayed_memory() should work even if proof_utils import fails."""
+        from archive_utils import identify_decayed_memory
+
+        old_date = (datetime.now() - timedelta(days=20)).strftime('%Y-%m-%d')
+        mock_memory.return_value = [
+            {"trigger": "some_lesson", "reinforced": 0, "last_used": old_date}
+        ]
+
+        # Simulate ImportError by making check_lesson_vitality unavailable
+        with patch.dict('sys.modules', {'proof_utils': None}):
+            # This should not crash, just fall back to normal decay behavior
+            decayed = identify_decayed_memory({"memory": []})
+
+            # Should decay normally when vitality check unavailable
+            self.assertEqual(len(decayed), 1)
+
+
 class TestComputePrunePlan(unittest.TestCase):
     """Tests for compute_prune_plan() function."""
 
@@ -573,6 +653,101 @@ class TestArchiveResolvedMismatchWithLesson(unittest.TestCase):
             self.assertEqual(call_args[1]["trigger"], "test trigger")
 
         self.assertTrue(success)
+
+
+class TestEvergreenLessons(unittest.TestCase):
+    """Tests for v3.10 Evergreen Lessons - lessons that never decay."""
+
+    @patch('archive_utils.get_memory_items')
+    @patch('archive_utils.MEMORY_SETTINGS', {"decay_threshold_days": 14, "reinforcement_threshold": 2})
+    def test_evergreen_never_decays(self, mock_memory):
+        """identify_decayed_memory() should never decay evergreen lessons."""
+        from archive_utils import identify_decayed_memory
+
+        old_date = (datetime.now() - timedelta(days=100)).strftime('%Y-%m-%d')
+        mock_memory.return_value = [
+            # Old unreinforced evergreen - should NOT decay
+            {"trigger": "evergreen_lesson", "reinforced": 0, "last_used": old_date, "evergreen": True},
+            # Old unreinforced non-evergreen - SHOULD decay
+            {"trigger": "normal_lesson", "reinforced": 0, "last_used": old_date}
+        ]
+
+        decayed = identify_decayed_memory({"memory": []})
+
+        # Only the non-evergreen lesson should be decayed
+        self.assertEqual(len(decayed), 1)
+        self.assertEqual(decayed[0][0]["trigger"], "normal_lesson")
+
+    @patch('archive_utils.get_memory_items')
+    @patch('archive_utils.MEMORY_SETTINGS', {"decay_threshold_days": 14, "reinforcement_threshold": 2})
+    def test_evergreen_survives_single_reinforcement(self, mock_memory):
+        """Evergreen lessons with single reinforcement should also survive."""
+        from archive_utils import identify_decayed_memory
+
+        old_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+        mock_memory.return_value = [
+            # Evergreen with 1 reinforcement (would normally decay at >7 days)
+            {"trigger": "core_principle", "reinforced": 1, "last_used": old_date, "evergreen": True}
+        ]
+
+        decayed = identify_decayed_memory({"memory": []})
+
+        # Evergreen should survive regardless of reinforcement
+        self.assertEqual(len(decayed), 0)
+
+
+class TestCleanupArchive(unittest.TestCase):
+    """Tests for v3.10 cleanup_archive() - type-based retention policy."""
+
+    def test_dry_run_returns_analysis(self):
+        """cleanup_archive(dry_run=True) should return analysis without modifying."""
+        from archive_utils import cleanup_archive
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
+            # Write some test entries
+            old_date = (datetime.now() - timedelta(days=60)).isoformat()
+            new_date = datetime.now().isoformat()
+            f.write(json.dumps({"type": "completed_step", "timestamp": old_date}) + "\n")  # Should expire (>30 days)
+            f.write(json.dumps({"type": "completed_objective", "timestamp": new_date}) + "\n")  # Should keep (365 days)
+            f.flush()
+            temp_path = f.name
+
+        try:
+            with patch('archive_utils.get_archive_file', return_value=Path(temp_path)):
+                result = cleanup_archive(dry_run=True)
+
+            self.assertIn("by_type", result)
+            self.assertEqual(result["removed"], 1)  # Old step expired
+            self.assertEqual(result["kept"], 1)     # New objective kept
+        finally:
+            os.unlink(temp_path)
+
+    def test_removes_expired_entries(self):
+        """cleanup_archive() should remove entries beyond retention period."""
+        from archive_utils import cleanup_archive
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
+            # Write entries of different ages
+            very_old = (datetime.now() - timedelta(days=400)).isoformat()  # > 365 days
+            recent = datetime.now().isoformat()
+            f.write(json.dumps({"type": "completed_objective", "timestamp": very_old}) + "\n")
+            f.write(json.dumps({"type": "completed_objective", "timestamp": recent}) + "\n")
+            f.flush()
+            temp_path = f.name
+
+        try:
+            with patch('archive_utils.get_archive_file', return_value=Path(temp_path)):
+                removed, kept = cleanup_archive(dry_run=False)
+
+            self.assertEqual(removed, 1)  # Very old objective expired
+            self.assertEqual(kept, 1)     # Recent objective kept
+
+            # Verify file was updated
+            with open(temp_path, 'r') as f:
+                lines = f.readlines()
+            self.assertEqual(len(lines), 1)  # Only one entry left
+        finally:
+            os.unlink(temp_path)
 
 
 if __name__ == '__main__':

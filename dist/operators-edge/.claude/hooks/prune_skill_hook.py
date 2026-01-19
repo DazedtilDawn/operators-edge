@@ -137,6 +137,48 @@ def format_prune_report(state: dict, prune_plan: dict) -> str:
         lines.append("Lessons to decay: 0")
     lines.append("")
 
+    # Vitality-protected lessons (v3.10.1 - Proof-Grounded Memory)
+    try:
+        from archive_utils import get_vitality_protected_lessons
+        protected = get_vitality_protected_lessons(state)
+        if protected:
+            lines.append(f"Lessons protected by proof vitality: {len(protected)}")
+            for lesson, vitality in protected[:3]:
+                trigger = lesson.get("trigger", "unknown")[:25]
+                matches = vitality.get("matches", 0)
+                lines.append(f"  - [{trigger}] ({matches} proof matches)")
+            if len(protected) > 3:
+                lines.append(f"  ... and {len(protected) - 3} more")
+            lines.append("")
+    except ImportError:
+        pass  # Vitality check unavailable
+
+    # Memory reconciliation (v3.10.1 - show proof-vs-YAML discrepancies)
+    try:
+        from archive_utils import get_memory_reconciliation_info
+        reconciliation = get_memory_reconciliation_info(state)
+        if reconciliation:
+            lines.extend([
+                "-" * 70,
+                "MEMORY RECONCILIATION",
+                "-" * 70,
+                "Proof shows usage not reflected in YAML:",
+            ])
+            for item in reconciliation[:5]:
+                trigger = item["trigger"][:25]
+                proof = item["proof_matches"]
+                yaml = item["yaml_reinforced"]
+                lines.append(f"  - [{trigger}]: {proof} proof matches, YAML shows {yaml}")
+            if len(reconciliation) > 5:
+                lines.append(f"  ... and {len(reconciliation) - 5} more")
+            lines.extend([
+                "",
+                "Tip: Edit active_context.yaml to update reinforced counts if desired.",
+                "",
+            ])
+    except ImportError:
+        pass  # Reconciliation unavailable
+
     # Summary
     lines.extend([
         "-" * 70,
@@ -258,6 +300,41 @@ def format_prune_results(results: dict) -> str:
     return "\n".join(lines)
 
 
+def learn_patterns_report(state: dict) -> str:
+    """
+    v3.12: Learn file patterns from proof and report findings.
+    """
+    lines = ["", "-" * 70, "PATTERN LEARNING (v3.12)", "-" * 70]
+
+    try:
+        from memory_utils import learn_lesson_patterns
+
+        learned = learn_lesson_patterns(state, days_lookback=14)
+
+        if learned:
+            lines.append(f"Patterns inferred from proof: {len(learned)}")
+            for trigger, info in list(learned.items())[:5]:
+                pattern = info.get("inferred_pattern", "?")
+                apps = info.get("applications", 0)
+                coverage = info.get("coverage", 0)
+                lines.append(f"  [{trigger[:25]}]: {pattern} ({apps} apps, {int(coverage*100)}% coverage)")
+            if len(learned) > 5:
+                lines.append(f"  ... and {len(learned) - 5} more")
+            lines.extend([
+                "",
+                "To enable pattern filtering, add learned_patterns to lessons in YAML:",
+                "  Example: learned_patterns: {inferred_pattern: '**/*.py', coverage: 0.8}",
+            ])
+        else:
+            lines.append("No patterns could be inferred (need 3+ successful applications)")
+
+    except (ImportError, Exception) as e:
+        lines.append(f"Pattern learning unavailable: {e}")
+
+    lines.append("-" * 70)
+    return "\n".join(lines)
+
+
 def handle_prune() -> str:
     """
     Handle /edge-prune - compute and optionally execute prune plan.
@@ -280,6 +357,9 @@ def handle_prune() -> str:
 
         # Run Edge Loop after successful prune (non-blocking)
         report += run_edge_loop()
+
+    # v3.12: Learn patterns from proof (always run, not just when pruning)
+    report += learn_patterns_report(state)
 
     return report
 

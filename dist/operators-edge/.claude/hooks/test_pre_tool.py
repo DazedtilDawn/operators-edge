@@ -216,6 +216,113 @@ class TestCheckRetryBlocking(unittest.TestCase):
         self.assertIsNone(result)
 
 
+class TestCheckIntentConfirmed(unittest.TestCase):
+    """Tests for check_intent_confirmed() function (Understanding-First v1.0)."""
+
+    def test_ignores_non_edit_tools(self):
+        """check_intent_confirmed() should ignore non-edit tools."""
+        from pre_tool import check_intent_confirmed
+
+        result = check_intent_confirmed("Bash", {"command": "ls"})
+        self.assertIsNone(result)
+
+        result = check_intent_confirmed("Read", {"file_path": "/code/file.py"})
+        self.assertIsNone(result)
+
+    @patch('pre_tool.load_yaml_state')
+    def test_allows_safe_paths(self, mock_state):
+        """check_intent_confirmed() should allow safe paths without intent."""
+        from pre_tool import check_intent_confirmed
+
+        mock_state.return_value = {"intent": {}}
+
+        safe_paths = [
+            "active_context.yaml",
+            ".proof/session_log.jsonl",
+            "checklist.md",
+            "archive.md",
+            ".claude/plans/my-plan.md"
+        ]
+
+        for path in safe_paths:
+            result = check_intent_confirmed("Edit", {"file_path": path})
+            self.assertIsNone(result, f"Path '{path}' should be allowed")
+
+    @patch('pre_tool.load_yaml_state')
+    def test_allows_if_no_intent_set(self, mock_state):
+        """check_intent_confirmed() should allow if no intent set (backward compat)."""
+        from pre_tool import check_intent_confirmed
+
+        mock_state.return_value = {"intent": {}}
+
+        result = check_intent_confirmed("Edit", {"file_path": "/code/file.py"})
+
+        # Backward compatibility: no user_wants = skip intent check
+        self.assertIsNone(result)
+
+    @patch('pre_tool.load_yaml_state')
+    def test_asks_if_intent_not_confirmed(self, mock_state):
+        """check_intent_confirmed() should ask if intent set but not confirmed."""
+        from pre_tool import check_intent_confirmed
+
+        mock_state.return_value = {
+            "intent": {
+                "user_wants": "Add a new feature",
+                "success_looks_like": "Feature works",
+                "confirmed": False
+            }
+        }
+
+        result = check_intent_confirmed("Edit", {"file_path": "/code/file.py"})
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result[0], "ask")
+        self.assertIn("Intent not confirmed", result[1])
+        self.assertIn("Add a new feature", result[1])
+
+    @patch('pre_tool.load_yaml_state')
+    def test_allows_if_intent_confirmed(self, mock_state):
+        """check_intent_confirmed() should allow edits if intent confirmed."""
+        from pre_tool import check_intent_confirmed
+
+        mock_state.return_value = {
+            "intent": {
+                "user_wants": "Add a new feature",
+                "success_looks_like": "Feature works",
+                "confirmed": True,
+                "confirmed_at": "2026-01-14T10:00:00"
+            }
+        }
+
+        result = check_intent_confirmed("Edit", {"file_path": "/code/file.py"})
+
+        self.assertIsNone(result)
+
+    @patch('pre_tool.load_yaml_state')
+    def test_handles_missing_state(self, mock_state):
+        """check_intent_confirmed() should pass through if no state."""
+        from pre_tool import check_intent_confirmed
+
+        mock_state.return_value = None
+
+        # Should return None to let plan_requirement handle it
+        result = check_intent_confirmed("Edit", {"file_path": "/code/file.py"})
+
+        self.assertIsNone(result)
+
+    @patch('pre_tool.load_yaml_state')
+    def test_handles_missing_intent_section(self, mock_state):
+        """check_intent_confirmed() should allow if no intent section (backward compat)."""
+        from pre_tool import check_intent_confirmed
+
+        mock_state.return_value = {"plan": []}  # No intent section
+
+        result = check_intent_confirmed("Edit", {"file_path": "/code/file.py"})
+
+        # Backward compatibility: no intent section = skip check
+        self.assertIsNone(result)
+
+
 class TestCheckPlanRequirement(unittest.TestCase):
     """Tests for check_plan_requirement() function."""
 

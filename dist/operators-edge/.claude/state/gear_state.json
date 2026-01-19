@@ -1,0 +1,10 @@
+{
+  "current_gear": "patrol",
+  "entered_at": "2026-01-13T11:04:04.366656",
+  "last_run_at": "2026-01-13T11:04:04.367046",
+  "iterations": 1,
+  "last_transition": "active_to_patrol",
+  "patrol_findings_count": 190,
+  "dream_proposals_count": 0,
+  "completion_epoch": null
+}

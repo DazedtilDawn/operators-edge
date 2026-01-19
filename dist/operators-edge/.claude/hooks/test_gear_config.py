@@ -39,6 +39,11 @@ class TestGearTransitionEnum(unittest.TestCase):
         from gear_config import GearTransition
         self.assertIsNotNone(GearTransition.ACTIVE_TO_PATROL)
 
+    def test_active_to_dream(self):
+        """Should have ACTIVE_TO_DREAM transition."""
+        from gear_config import GearTransition
+        self.assertIsNotNone(GearTransition.ACTIVE_TO_DREAM)
+
     def test_patrol_to_active(self):
         """Should have PATROL_TO_ACTIVE transition."""
         from gear_config import GearTransition
@@ -346,6 +351,135 @@ class TestDisplayHelpers(unittest.TestCase):
         result = format_gear_status(state)
         self.assertIsInstance(result, str)
         self.assertIn("Active", result)
+
+
+class TestQualityGateOverride(unittest.TestCase):
+    """Tests for QualityGateOverride dataclass (v5.2)."""
+
+    def test_to_dict_full_mode(self):
+        """QualityGateOverride should serialize to dict in full mode."""
+        from gear_config import QualityGateOverride
+
+        override = QualityGateOverride(
+            mode="full",
+            approved_at="2024-01-01T00:00:00",
+            session_id="test-session",
+            objective_hash=12345,
+            approved_checks=[],
+            reason="user_approved",
+        )
+        result = override.to_dict()
+
+        self.assertEqual(result["mode"], "full")
+        self.assertEqual(result["session_id"], "test-session")
+        self.assertEqual(result["objective_hash"], 12345)
+        self.assertEqual(result["approved_checks"], [])
+
+    def test_to_dict_check_specific_mode(self):
+        """QualityGateOverride should serialize approved_checks in check_specific mode."""
+        from gear_config import QualityGateOverride
+
+        override = QualityGateOverride(
+            mode="check_specific",
+            approved_at="2024-01-01T00:00:00",
+            session_id="test-session",
+            objective_hash=12345,
+            approved_checks=["steps_have_proof", "no_dangling_in_progress"],
+            reason="user_approved",
+        )
+        result = override.to_dict()
+
+        self.assertEqual(result["mode"], "check_specific")
+        self.assertEqual(result["approved_checks"], ["steps_have_proof", "no_dangling_in_progress"])
+
+    def test_from_dict_full_mode(self):
+        """QualityGateOverride should deserialize from dict."""
+        from gear_config import QualityGateOverride
+
+        data = {
+            "mode": "full",
+            "approved_at": "2024-01-01T00:00:00",
+            "session_id": "test-session",
+            "objective_hash": 12345,
+            "approved_checks": [],
+            "reason": "user_approved",
+        }
+        override = QualityGateOverride.from_dict(data)
+
+        self.assertEqual(override.mode, "full")
+        self.assertEqual(override.session_id, "test-session")
+        self.assertEqual(override.objective_hash, 12345)
+
+    def test_from_dict_defaults_to_full_mode(self):
+        """QualityGateOverride should default to full mode (v5.1 backward compat)."""
+        from gear_config import QualityGateOverride
+
+        # v5.1 format without mode field
+        data = {
+            "approved_at": "2024-01-01T00:00:00",
+            "session_id": "test-session",
+            "objective_hash": 12345,
+        }
+        override = QualityGateOverride.from_dict(data)
+
+        self.assertEqual(override.mode, "full")  # Default
+
+    def test_from_dict_returns_none_for_none(self):
+        """QualityGateOverride.from_dict(None) should return None."""
+        from gear_config import QualityGateOverride
+
+        result = QualityGateOverride.from_dict(None)
+        self.assertIsNone(result)
+
+    def test_gear_state_serializes_override(self):
+        """GearState.to_dict() should serialize QualityGateOverride."""
+        from gear_config import GearState, Gear, QualityGateOverride
+
+        override = QualityGateOverride(
+            mode="check_specific",
+            approved_at="2024-01-01T00:00:00",
+            session_id="test",
+            objective_hash=123,
+            approved_checks=["check1"],
+            reason="test",
+        )
+        state = GearState(
+            current_gear=Gear.ACTIVE,
+            entered_at="2024-01-01T00:00:00",
+            iterations=0,
+            last_transition=None,
+            patrol_findings_count=0,
+            dream_proposals_count=0,
+            quality_gate_override=override,
+        )
+        result = state.to_dict()
+
+        self.assertIsInstance(result["quality_gate_override"], dict)
+        self.assertEqual(result["quality_gate_override"]["mode"], "check_specific")
+        self.assertEqual(result["quality_gate_override"]["approved_checks"], ["check1"])
+
+    def test_gear_state_deserializes_override(self):
+        """GearState.from_dict() should deserialize QualityGateOverride."""
+        from gear_config import GearState, QualityGateOverride
+
+        data = {
+            "current_gear": "active",
+            "entered_at": "2024-01-01T00:00:00",
+            "iterations": 0,
+            "quality_gate_override": {
+                "mode": "check_specific",
+                "approved_at": "2024-01-01T00:00:00",
+                "session_id": "test",
+                "objective_hash": 123,
+                "approved_checks": ["check1", "check2"],
+                "reason": "test",
+            },
+        }
+        state = GearState.from_dict(data)
+
+        self.assertIsInstance(state.quality_gate_override, QualityGateOverride)
+        self.assertEqual(state.quality_gate_override.mode, "check_specific")
+        self.assertEqual(state.quality_gate_override.approved_checks, ["check1", "check2"])
 
 
 if __name__ == "__main__":

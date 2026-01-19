@@ -1,0 +1,42 @@
+{
+  "pending_run": null,
+  "triage": {
+    "signals": [
+      "persistent_state",
+      "proof_dir",
+      "writes"
+    ],
+    "score": 3,
+    "thresholds": {
+      "level1": 3,
+      "level2": 5
+    },
+    "updated_at": "2026-01-15T09:42:04.413635"
+  },
+  "last_run": {
+    "run_dir": "/Users/andykoski/Documents/Operators Edge/.proof/evals/2026-01-15/run-19",
+    "run_id": 19,
+    "before": "/Users/andykoski/Documents/Operators Edge/.proof/evals/2026-01-15/run-19/before.json",
+    "tool": "Edit",
+    "level": 1,
+    "invariants": [],
+    "policy": {
+      "warn_only": true,
+      "gate_on_fail": false
+    },
+    "triage": {
+      "signals": [
+        "persistent_state",
+        "proof_dir",
+        "writes"
+      ],
+      "score": 3,
+      "thresholds": {
+        "level1": 3,
+        "level2": 5
+      },
+      "updated_at": "2026-01-15T09:42:04.413635"
+    },
+    "started_at": "2026-01-15T09:42:04.414470"
+  }
+}

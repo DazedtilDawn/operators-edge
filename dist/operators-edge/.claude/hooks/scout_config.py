@@ -28,6 +28,7 @@ class FindingType(Enum):
     DUPLICATION = "duplication"    # Code duplication detected
     LESSON_VIOLATION = "lesson_violation"  # Code violating a learned lesson (v3.6)
     UNVERIFIED_COMPLETION = "unverified_completion"  # Completed step with verification but no matching test (v3.9.2)
+    EVAL_FAILURE = "eval_failure"  # Eval invariant failure detected (v3.9.7)
 
 
 class FindingPriority(Enum):
@@ -155,6 +156,7 @@ TYPE_PRIORITY_BOOST = {
     FindingType.DUPLICATION: FindingPriority.LOW,
     FindingType.LESSON_VIOLATION: FindingPriority.MEDIUM,  # v3.6: Lessons as audits
     FindingType.UNVERIFIED_COMPLETION: FindingPriority.MEDIUM,  # v3.9.2: Verification without test
+    FindingType.EVAL_FAILURE: FindingPriority.HIGH,  # v3.9.7: Eval invariant failures
 }
 
 

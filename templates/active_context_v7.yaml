@@ -1,0 +1,100 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# OPERATOR'S EDGE v7 - ACTIVE CONTEXT TEMPLATE
+# Copy this to your project as active_context.yaml
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# v7 changes: Auto-archive keeps plan slim (max 3 completed steps visible).
+# Completed steps are preserved in .proof/archive.jsonl.
+#
+# See CHANGELOG.md for full version history.
+
+# Session metadata (auto-managed by hooks)
+session:
+  id: null
+  started_at: null
+
+# Intent verification (required before non-trivial edits)
+intent:
+  user_wants: ""
+  success_looks_like: ""
+  confirmed: false
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OBJECTIVE
+# ─────────────────────────────────────────────────────────────────────────────
+objective: "Set your objective here"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PLAN (only recent steps - completed ones auto-archive)
+# ─────────────────────────────────────────────────────────────────────────────
+current_step: 0
+
+plan: []
+# Step structure:
+#  - description: "What to do"
+#    status: pending|in_progress|completed|blocked
+#    proof: "Evidence of completion"
+#    is_verification: true  # Optional: marks verification steps
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONSTRAINTS
+# ─────────────────────────────────────────────────────────────────────────────
+constraints:
+  - "No destructive operations without confirmation"
+  - "All work must be provable"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MEMORY (lessons - top 3 shown at session start, all enforced at tool use)
+# ─────────────────────────────────────────────────────────────────────────────
+memory: []
+# Lesson structure:
+#  - trigger: "keyword"
+#    lesson: "What to do/avoid"
+#    evergreen: false
+#    reinforced: 0
+#    last_used: null
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MISMATCHES (unresolved only - resolved ones get archived)
+# ─────────────────────────────────────────────────────────────────────────────
+mismatches: []
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RISKS
+# ─────────────────────────────────────────────────────────────────────────────
+risks: []
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SELF SCORE
+# ─────────────────────────────────────────────────────────────────────────────
+self_score: null
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ARCHIVE REFERENCE
+# ─────────────────────────────────────────────────────────────────────────────
+archive:
+  path: ".proof/archive.jsonl"
+  last_prune: null
+  entries_archived: 0
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# RUNTIME STATE (managed by hooks - do not edit manually)
+# ═══════════════════════════════════════════════════════════════════════════════
+runtime:
+  junction:
+    pending: null
+    suppressions: []
+    history_tail: []
+  gear:
+    current: "active"
+    entered_at: null
+    iterations: 0
+  dispatch:
+    enabled: false
+    state: "stopped"
+    iteration: 0
+    stuck_count: 0
+    stats:
+      auto_executed: 0
+      junctions_hit: 0
+      objectives_completed: 0

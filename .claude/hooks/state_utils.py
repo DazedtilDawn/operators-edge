@@ -1350,9 +1350,12 @@ def set_new_objective(objective_text: str, clear_plan: bool = True) -> tuple[boo
     It updates the objective, resets intent for confirmation, and optionally
     clears the existing plan.
 
+    IMPORTANT (v6.1): Before clearing, existing plan is archived to preserve history.
+    Completed steps are recorded, incomplete steps are noted as "abandoned".
+
     Args:
         objective_text: The new objective text
-        clear_plan: If True, clear existing plan. If False, keep it.
+        clear_plan: If True, archive then clear existing plan. If False, keep it.
 
     Returns:
         Tuple of (success: bool, message: str)
@@ -1361,6 +1364,13 @@ def set_new_objective(objective_text: str, clear_plan: bool = True) -> tuple[boo
 
     if not yaml_file.exists():
         return (False, "active_context.yaml not found")
+
+    # v6.1: Archive existing plan before clearing (preserve history)
+    if clear_plan:
+        try:
+            _archive_plan_before_new_objective(objective_text)
+        except Exception:
+            pass  # Archive failure shouldn't block new objective
 
     try:
         lines = yaml_file.read_text().split('\n')
@@ -1529,3 +1539,266 @@ def extract_objective_text(text: str) -> str:
         text = text[1:-1]
 
     return text.strip()
+
+
+def _rewrite_plan_section(new_plan: list, new_current_step: int) -> bool:
+    """
+    Rewrite the plan section in active_context.yaml (v7.0 helper).
+
+    This function handles the complex task of replacing the plan array
+    in the YAML file while preserving all other content and formatting.
+
+    Args:
+        new_plan: The new plan list to write
+        new_current_step: The new current_step value
+
+    Returns:
+        True if successful, False otherwise
+    """
+    project_dir = get_project_dir()
+    if not project_dir:
+        return False
+
+    yaml_file = project_dir / "active_context.yaml"
+    if not yaml_file.exists():
+        return False
+
+    try:
+        content = yaml_file.read_text()
+        lines = content.split('\n')
+
+        new_lines = []
+        i = 0
+        in_plan_section = False
+        plan_indent = 0
+
+        while i < len(lines):
+            line = lines[i]
+            stripped = line.lstrip()
+            current_indent = len(line) - len(stripped)
+
+            # Handle current_step
+            if stripped.startswith("current_step:"):
+                new_lines.append(f"current_step: {new_current_step}")
+                i += 1
+                continue
+
+            # Detect start of plan section
+            if stripped.startswith("plan:"):
+                in_plan_section = True
+                plan_indent = current_indent
+
+                # Write the new plan
+                if not new_plan:
+                    new_lines.append(f"{' ' * plan_indent}plan: []")
+                else:
+                    new_lines.append(f"{' ' * plan_indent}plan:")
+                    for step in new_plan:
+                        if isinstance(step, dict):
+                            desc = step.get('description', '')
+                            status = step.get('status', 'pending')
+                            proof = step.get('proof', '')
+                            is_verification = step.get('is_verification', False)
+
+                            # Write step with proper indentation
+                            new_lines.append(f"{' ' * (plan_indent + 2)}- description: \"{desc}\"")
+                            new_lines.append(f"{' ' * (plan_indent + 4)}status: \"{status}\"")
+                            if proof:
+                                # Escape any quotes in proof
+                                proof_escaped = proof.replace('"', '\\"')
+                                new_lines.append(f"{' ' * (plan_indent + 4)}proof: \"{proof_escaped}\"")
+                            if is_verification:
+                                new_lines.append(f"{' ' * (plan_indent + 4)}is_verification: true")
+
+                # Skip old plan content
+                i += 1
+                while i < len(lines):
+                    next_line = lines[i]
+                    next_stripped = next_line.lstrip()
+                    next_indent = len(next_line) - len(next_stripped)
+
+                    # Check if we've exited the plan section
+                    if next_stripped and not next_stripped.startswith('#'):
+                        if next_indent <= plan_indent and not next_line.startswith(' ' * (plan_indent + 1)):
+                            # Back to same or lower indent = end of plan
+                            in_plan_section = False
+                            break
+                    elif not next_stripped:
+                        # Blank line might be end of plan
+                        # Check the next non-blank line
+                        peek = i + 1
+                        while peek < len(lines) and not lines[peek].strip():
+                            peek += 1
+                        if peek < len(lines):
+                            peek_stripped = lines[peek].lstrip()
+                            peek_indent = len(lines[peek]) - len(peek_stripped)
+                            if peek_indent <= plan_indent and peek_stripped and not peek_stripped.startswith('#'):
+                                in_plan_section = False
+                                break
+                    i += 1
+                continue
+
+            new_lines.append(line)
+            i += 1
+
+        write_text_atomic(yaml_file, '\n'.join(new_lines))
+        return True
+
+    except Exception:
+        return False
+
+
+def auto_archive_completed_steps(max_completed: int = 3) -> tuple[int, str]:
+    """
+    Auto-archive completed steps when there are too many (v7.0).
+
+    This keeps the active_context.yaml slim by archiving completed steps
+    immediately rather than waiting for manual /edge-prune.
+
+    Args:
+        max_completed: Maximum completed steps to keep visible (default 3).
+                       The most recent N completed steps are preserved.
+
+    Returns:
+        (archived_count, message)
+    """
+    try:
+        from archive_utils import archive_completed_step
+        from proof_utils import get_current_session_id
+    except ImportError:
+        return (0, "Archive utilities not available")
+
+    state = load_yaml_state()
+    if not state:
+        return (0, "No state file found")
+
+    plan = state.get("plan", [])
+    objective = state.get("objective", "Unknown")
+
+    # Find completed steps with their indices
+    completed_indices = []
+    for i, step in enumerate(plan):
+        if isinstance(step, dict) and step.get("status") == "completed":
+            completed_indices.append(i)
+
+    # Keep the most recent N completed steps (highest indices)
+    if len(completed_indices) <= max_completed:
+        return (0, "No pruning needed")
+
+    # Archive older completed steps (lower indices)
+    indices_to_archive = completed_indices[:-max_completed]  # All but last N
+
+    session_id = "unknown"
+    try:
+        session_id = get_current_session_id()
+    except Exception:
+        pass
+
+    # Archive each step (in reverse to preserve indices while removing)
+    archived_count = 0
+    for idx in sorted(indices_to_archive, reverse=True):
+        step = plan[idx]
+        step_number = idx + 1  # 1-based
+
+        # Archive the step
+        archive_completed_step(step, step_number, objective, session_id)
+
+        # Remove from plan
+        plan.pop(idx)
+        archived_count += 1
+
+    if archived_count > 0:
+        # Adjust current_step pointer if needed
+        current_step = state.get("current_step", 0)
+        new_current_step = current_step
+        if current_step > len(plan):
+            new_current_step = len(plan)
+
+        # Rewrite the plan section in the YAML file
+        _rewrite_plan_section(plan, new_current_step)
+
+    return (archived_count, f"Archived {archived_count} completed steps")
+
+
+def _archive_plan_before_new_objective(new_objective: str) -> None:
+    """
+    Archive the existing plan before setting a new objective (v6.1).
+
+    This preserves history of completed work and notes abandoned steps.
+    The archive entry includes:
+    - Old objective name
+    - New objective name
+    - List of completed steps with their proof
+    - List of incomplete steps (abandoned)
+
+    Archives to .proof/archive.jsonl
+    """
+    try:
+        from archive_utils import log_to_archive
+    except ImportError:
+        return  # Archive not available
+
+    state = load_yaml_state()
+    if not state:
+        return
+
+    old_objective = state.get("objective", "")
+    plan = state.get("plan", [])
+
+    if not plan or not old_objective:
+        return  # Nothing to archive
+
+    # Don't archive if objectives are the same (re-running same objective)
+    if old_objective.strip().lower() == new_objective.strip().lower():
+        return
+
+    # Categorize steps
+    completed = []
+    incomplete = []
+    for i, step in enumerate(plan):
+        if isinstance(step, dict):
+            status = step.get("status", "pending")
+            step_info = {
+                "step_number": i + 1,
+                "description": step.get("description", "")[:200],  # Truncate long descriptions
+                "status": status,
+                "proof": step.get("proof", "")[:500] if step.get("proof") else ""
+            }
+            if status == "completed":
+                completed.append(step_info)
+            else:
+                incomplete.append(step_info)
+
+    # Get session ID if available
+    try:
+        from proof_utils import get_current_session_id
+        session_id = get_current_session_id()
+    except (ImportError, Exception):
+        session_id = "unknown"
+
+    # Archive the transition
+    log_to_archive("objective_transition", {
+        "old_objective": old_objective[:200],
+        "new_objective": new_objective[:200],
+        "completed_steps": len(completed),
+        "incomplete_steps": len(incomplete),
+        "total_steps": len(plan),
+        "completed_details": completed,
+        "incomplete_details": incomplete,
+        "session_id": session_id,
+        "reason": "new_objective_set",
+        "note": "Incomplete steps were abandoned when new objective was set"
+    })
+
+    # v7.1: Capture partial objective data for learned guidance
+    # This captures what was working in the abandoned approach
+    try:
+        from archive_utils import capture_objective_partial
+        capture_objective_partial(
+            state=state,
+            session_id=session_id,
+            reason="objective_changed",
+            new_objective=new_objective
+        )
+    except Exception:
+        pass  # Guidance capture failure shouldn't block objective change

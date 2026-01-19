@@ -44,6 +44,7 @@ from state_utils import (
     get_runtime_section, update_runtime_section,
 )
 from proof_utils import get_current_session_id
+from archive_utils import capture_objective_completion
 
 # Feature flag: set to True to use YAML runtime section (v5 schema)
 USE_YAML_RUNTIME = True
@@ -316,6 +317,36 @@ def _check_quality_gate_override(
     return (False, failed_checks or [])
 
 
+def _capture_completion_on_transition(
+    state: Dict[str, Any],
+    outcome_quality: str = "clean",
+    outcome_notes: str = ""
+) -> None:
+    """
+    Capture objective completion data when transitioning ACTIVE → PATROL.
+
+    This is called when quality gate passes (in any mode: natural, override, check-specific).
+    Silently fails if capture fails - transition should still proceed.
+
+    Args:
+        state: The active_context.yaml state
+        outcome_quality: "clean", "override", or "with_issues"
+        outcome_notes: Additional notes about the completion
+    """
+    try:
+        session_id = get_current_session_id()
+        capture_objective_completion(
+            state=state,
+            session_id=session_id,
+            outcome_quality=outcome_quality,
+            outcome_notes=outcome_notes
+        )
+    except Exception as e:
+        # Log but don't fail the transition - capture is observational
+        import sys
+        print(f"[guidance] Failed to capture objective completion: {e}", file=sys.stderr)
+
+
 def execute_transition(
     gear_state: GearState,
     transition: GearTransition,
@@ -508,6 +539,8 @@ def _run_active(
                         continue_loop=False,
                         display_message=f"Quality gate already passed but transition failed to persist: {error}",
                     )
+                # v7.1: Capture objective completion for learned guidance
+                _capture_completion_on_transition(state, "clean", "quality gate previously passed")
                 return GearEngineResult(
                     gear_executed=Gear.ACTIVE,
                     transitioned=True,
@@ -541,6 +574,8 @@ def _run_active(
                         continue_loop=False,
                         display_message=f"Quality gate override active but transition failed: {error}",
                     )
+                # v7.1: Capture objective completion for learned guidance (override)
+                _capture_completion_on_transition(state, "override", "full quality gate override")
                 return GearEngineResult(
                     gear_executed=Gear.ACTIVE,
                     transitioned=True,
@@ -583,6 +618,10 @@ def _run_active(
                             display_message=f"Quality gate check-specific override active but transition failed: {error}",
                         )
                     approved_count = len(quality_result.failed_checks) - len(remaining_failures)
+                    # v7.1: Capture objective completion for learned guidance (check-specific override)
+                    _capture_completion_on_transition(
+                        state, "override", f"check-specific override ({approved_count} checks approved)"
+                    )
                     return GearEngineResult(
                         gear_executed=Gear.ACTIVE,
                         transitioned=True,
@@ -643,6 +682,8 @@ def _run_active(
                     continue_loop=False,
                     display_message=f"Quality gate passed but transition failed to persist: {error}\n{format_quality_gate_result(quality_result)}",
                 )
+            # v7.1: Capture objective completion for learned guidance (clean pass)
+            _capture_completion_on_transition(state, "clean", "natural quality gate pass")
             return GearEngineResult(
                 gear_executed=Gear.ACTIVE,
                 transitioned=True,

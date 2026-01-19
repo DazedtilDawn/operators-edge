@@ -280,6 +280,29 @@ def should_transition_from_active(state: Dict[str, Any]) -> Tuple[bool, Optional
 
 
 # =============================================================================
+# LESSON SURFACING (v3.10)
+# =============================================================================
+
+def get_lessons_for_current_step(state: Dict[str, Any]) -> list:
+    """
+    Surface lessons relevant to the current step.
+    Returns list of relevant lessons (for display or guidance).
+    """
+    current = get_current_step(state)
+    if not current:
+        return []
+
+    try:
+        from memory_utils import surface_relevant_memory
+
+        step = current["step"]
+        context = step.get("description", "")
+        return surface_relevant_memory(state, context)
+    except (ImportError, Exception):
+        return []
+
+
+# =============================================================================
 # DISPLAY HELPERS
 # =============================================================================
 
@@ -297,5 +320,14 @@ def format_active_status(state: Dict[str, Any]) -> str:
         f"   Progress: {completed}/{total} steps",
         f"   Current: {current_desc[:40]}{'...' if len(current_desc) > 40 else ''}",
     ]
+
+    # v3.10: Surface relevant lessons for current step
+    relevant = get_lessons_for_current_step(state)
+    if relevant:
+        lines.append("   📚 Relevant lessons:")
+        for lesson in relevant[:3]:
+            trigger = lesson.get("trigger", "?")
+            text = lesson.get("lesson", "")[:50]
+            lines.append(f"      [{trigger}]: {text}...")
 
     return "\n".join(lines)

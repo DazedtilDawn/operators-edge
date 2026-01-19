@@ -3,116 +3,33 @@
 
 # Current session (updated by session_start hook)
 session:
-  id: "20260113-tas-v1-commit"
-  started_at: "2026-01-13T09:00:00"
-  note: "TAS v1.0 COMMITTED - c3fbb48"
+  id: "20260114-understanding-first"
+  started_at: "2026-01-14T10:00:00"
+  note: "Understanding-First Architecture v1.0"
 
-  state_hash_start: "68c413a8a31df2033deba53cb708e7f85b819196cc5643eb3a7445f16712e1dd"
-mode: "active"
+  state_hash_start: null
+mode: "done"
+
+# Intent verification (v1.0) - required before planning/editing
+# user_wants: What the user actually asked for
+# success_looks_like: Observable criteria for success
+# confirmed: Must be true before non-trivial edits
+intent:
+  user_wants: "Review v8.0 Context Engineering updates (Phase 9)"
+  success_looks_like: "Comprehensive review of v8.0 implementation provided"
+  confirmed: true
+  confirmed_at: "2026-01-18T23:50:00"
 
 # What are we trying to achieve?
-objective: "Refactor identify_decayed_memory() - reduce complexity"
+objective: "v8.0 Context Engineering Review - Complete"
 
 # Current position in the plan
-current_step: 5
+current_step: 0
 
 # The plan - each step must have description, status, and proof
 # Status: pending | in_progress | completed | blocked
-plan:
-  - description: "Extract date parsing helper"
-    status: "completed"
-    proof: "Added parse_last_used_date() helper at line 358, updated identify_decayed_memory() to use it"
-  - description: "Extract decay decision predicate"
-    status: "completed"
-    proof: "Added check_lesson_decay() helper at line 380, main loop now 3 lines vs 15"
-  - description: "Clean up vitality import"
-    status: "completed"
-    proof: "Added is_lesson_vital() helper at line 380, main function now 18 lines vs 40"
-  - description: "Run tests to verify no behavior change"
-    status: "completed"
-    proof: "37 archive_utils tests pass, 2 importability tests pass"
-
-# Completed work:
-# TAS v1.0: Trustworthy Autonomy - dispatch_hook.py, scorecard_utils.py, governor - commit c3fbb48 (4 phases, 54 tests)
-# v5.0-phase2: State Consolidation - junction/gear/dispatch state now in active_context.yaml runtime section (7 steps, YAML-first with JSON fallback)
-# v3.12: Auto-Learn File Patterns - zero-config lesson targeting, infers globs from proof (4 steps, 12 new tests)
-# v3.11.2: Auto-Categorization - system infers dismissal reasons from behavior (mismatched input → false_positive, stale → context_changed)
-# v3.11.1: Matching Quality Instrumentation - dismissal reason tracking, false positive/negative rates (3 steps, 13 new tests)
-# v3.11: Obligations MVP - Mechanical Learning - obligations track lesson application, LAR/RWR metrics (6 steps, 19 new tests)
-# v3.10.1: Proof-Grounded Memory - lessons protected by proof vitality (observations > claims), prune report shows protected (5 steps, 8 new tests)
-# v3.10: Living Memory Architecture - evergreen lessons, active surfacing, archive retention (6 steps, 199 tests)
-# v3.9.9: Resilient Proof Logging - atomic writes, session isolation, recovery mechanism (7 steps, 34 tests)
-# v4.0-test: Protocol v4.0 Human Use Test - verified all modes and transitions work correctly
-# v4.0: Protocol v4.0 Complete - Phase 1 (mode awareness), Phase 2 (mode behavior), Phase 3 (auto transitions)
-# v4.0-phase2: Mode-Specific Behavior - PLAN/REVIEW/DONE skip gears, ACTIVE runs gear engine (5 steps)
-# v4.0-phase1: Mode Awareness - mode field, detect_mode(), /edge plan|active|review|done subcommands, deprecation warnings (5 steps)
-# v3.9.10: Release-blocker fixes - junction UX with dismiss TTL, archive decision, protocol v4.0 spec (117 tests pass)
-# v4.0-spec: Protocol Specification v4.0 - allowances vs dismissals, observations vs claims, transactional state updates
-# v3.9.9: Lock recovery fix + readonly mode for junction_utils (96 tests pass)
-# v3.9.8: Eval Phase 2 Enforcement - auto-mismatch on failure, gate_on_fail blocking, 7-day retention, 43 tests
-# v4.0: Operator's Edge Universal - Codex CLI adapter (9 steps, 6 skills installed to ~/.codex/skills/)
-# v2.2: Code Review Fixes - quadtree animation fallback, splitLines() for cross-platform line endings, unified .node-shape class
-# v2.1: Enhanced LLM Export - session context (phases, duration), related files, work timeline, phase-aware diffs
-# v2.0: Performance & Quality Fixes - quadtree O(log N), search+reveal fix, diff cap 2000 chars, style consistency
-# v1.9: LLM-Friendly Diff Export - one-click export (E key or button), markdown format with context + diff + analysis prompts
-# v1.8: Diff Takeover Polish - flex layout fills card space, max-width 900px, height:0 trick
-# v1.7: Diff Takeover Mode - click label or D key to expand diff, stats collapse, size/position persistence
-# v1.6: Multi-Layout Label Visibility - tooltips with full path on all layouts, smaller fonts (7-8px), filename truncation
-# v1.5: Multi-Layout Visualization - 6 layouts (Force, EdgeBundling, Treemap, CirclePacking, Sunburst, Grid) for Explorer + Story modes
-# v1.4: Proof Visualizer Refactor - split 4,371 line file into 7 focused modules (94% reduction), external CSS/JS assets
-# v1.3.1: Story Mode Polish - Clouds toggle button, shine/fade on touch, label readability, heatmap fix
-# v1.3: Constellation Mode - brightness tiers, hover reveal, search promotes, reveal all toggle
-# v1.2: Cluster Islands Layout - ring positioning, group forces, Story mode support
-# v0.9.9a: Soft Territory Fixes - fullscreen layout, aura visibility, Story mode auras, toggle for both modes
-# v0.9.9: Soft Territory - node auras merge into organic cluster boundaries, toggle button, replaces contours
-# v0.9.8: Diff Preview - show code changes in insight card, expand/collapse, red/green styling
-# v0.9.7: Import Graph - structural dependency edges in Explorer (151 edges), visual distinction, insight card badges
-# v0.9.6: Luminous Membranes - focus terrain, density contours, extension colors, edge glow, purity opacity
-# v0.9.5: Explorer focus mode, related files fix, dashboard skeleton, digest sparklines
-# v0.9: Edge Digest - automated reflection, recommendations to next_focus, integrated into edge_loop
-# v0.8.1: Layout cache, heat legend, fixed insight card anchoring, smooth mode transitions
-# v0.8+: Bug fixes - graphData.edges not links, position restore manual update, story mode controls moved below graph
-# v0.8: Explorer Mode - static codebase map, Story↔Explorer toggle, phase heat overlay, 105 files/242 edges
-# v0.7.1: Story Mode - UX Polish: keyboard navigation (← → Space Esc), phase toast, diff scaffold
-# v0.7: Story Mode - Insight Card 2.0: phase context, related files, persistence
-# v0.6c: Story Mode - Bug fix: action coloring now uses inline styles to override heatmap fills
-# v0.6b: Story Mode - SOTA Insight Card with fullscreen node click, sparklines, smart insights
-# v0.6a: Story Mode - Interaction Mode Coloring (N1) + Intensity Glow (N2) - nodes colored by action, pulse on touch
-# v0.5.2: Story Mode - fullscreen playback controls, disabled auto-refresh for stable playback
-# v0.5.1: Story Mode - phase duration + CTI delta in narrative, phase_summary.json export
-# v0.5: Story Mode - timeline scrubber, intent phases, playback controls, node persistence, micro-phase collapse
-# v3.9.5: Live Server Mode - edge_server.py at localhost:8080, auto-starts from edge_loop.sh
-# v3.9.4: Proof Visualizer v0.4.1 + Edge Loop integration (13 steps archived)
-# v1: YAML state, enforcement hooks, Windows packaging
-# v2: Smart orchestrator, 6-check loop, constant memory, pruning
-# v2.1: Research command system - scan, prompt generation, results tracking
-# v2.2: Brainstorm command - project scanning, 3-phase ideation, expert personas
-# v2.3: Pragmatic Layering refactor - edge_utils.py split into 6 focused modules (10 steps, score 5/6)
-# v2.4: Automated reflection - score patterns, recurring failures, improvement suggestions (8 steps, score 5/6)
-# v2.5: Lesson deduplication and consolidation (9 steps, score 5/6)
-# v2.6: YOLO Mode with Guardrails - reversibility-gated auto-execution (9 steps, score 6/6)
-# v2.7: Dispatch Mode - YOLO as autopilot with junction gates (7 steps)
-# v2.8: Scout Mode - autonomous codebase exploration when no objective (7 steps)
-# v3.0: Autonomous Edge - /edge unified command, continuous loop, complexity classification, auto-plan (7 steps)
-# v3.1: Discovery Mode - self-aware feature proposals from archive/lessons/patterns (6 steps)
-# v3.2: ClickUp Integration - auto-create tasks from objectives, sync completion status (5 steps)
-# v3.3: Discovery Filter - meta-lesson detection to reduce false positives (3 steps)
-# v3.4: Lesson Extraction - mismatch + trigger = lesson, auto-capture at resolution (4 steps)
-# v3.5: Risks Enforcement - mandatory failure mode planning before edits (5 steps)
-# v3.6: Lessons as Living Audits - lessons auto-scan codebase for violations (7 steps, 961 tests)
-# v3.7: Three Gears Mode - automatic mode switching (Active→Patrol→Dream) (8 steps, 1011 tests, score 6/6)
-# v3.8: Gear Integration - /edge skill now executes Three Gears logic, 1251 tests
-# v3.8.1: Architecture Review - identified skill-as-documentation vs hook-based execution gap
-# v3.9: Hook-Based Gear Execution - UserPromptSubmit hook calls gear_engine, 1283 tests
-# v3.9.1: Hook-Based Prune - /edge-prune now triggers prune_skill_hook.py via UserPromptSubmit, 1307 tests
-# v3.9.2: Verification Field - optional verification on plan steps, PATROL flags unverified completions, 1321 tests
-# v3.9.3: Quality Gate - objective completion checks before ACTIVE→PATROL transition, 1350 tests
-# v3.9.6: Current Step Normalization - auto-normalize pointer when plan complete, 16 tests
-# v3.9.7: Eval Failure Scout Integration - PATROL surfaces eval invariant failures, 7 new tests
-# v3.9.8+: Port /edge-verify from Codex CLI - quality checks without ending session
-
-
-# Auto-generated recommendations (Edge Digest)
+# is_verification: true marks verification steps (required for completion)
+plan: []
 next_focus:
   # Gap Analysis Roadmap (P0-P2 priority)
   - "P0: Auto-detect mismatches from hook failures (PreToolUse blocks, PostToolUse unexpected state)"
@@ -194,6 +111,11 @@ memory:
     lesson: "Plan mode auto-detected via PreToolUse hook on EnterPlanMode - sets flag file that is_readonly() checks"
     reinforced: 1
     last_used: "2026-01-12"
+  - trigger: "supervision vs training"
+    lesson: "Claude doesn't fail because it doesn't know patterns - it fails because it loses track. Supervision (drift detection, context monitoring) beats training (pattern teaching)."
+    evergreen: true
+    reinforced: 1
+    last_used: "2026-01-18"
   - trigger: "junction semantics + approve vs dismiss"
     lesson: "Approve creates one-time allowance (consumed on use), dismiss creates time-limited auto-approve (expires after TTL) - distinct use cases"
     reinforced: 1
@@ -293,12 +215,12 @@ runtime:
         timestamp: "2026-01-13T23:45:00"
     junction:
       pending:
-        id: "26c90799-55c5-454b-928d-369abc18782d"
+        id: "4f4f72b5-f145-4d43-bdda-df9675a05d4e"
         type: "finding_selection"
         payload:
           reason: "Select a finding to work on"
           gear: "patrol"
-        created_at: "2026-01-14T01:08:11.528989"
+        created_at: "2026-01-17T12:02:57.494522"
         source: "edge"
       suppressions: []
       history_tail:

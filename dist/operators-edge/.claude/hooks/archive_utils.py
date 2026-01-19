@@ -10,7 +10,7 @@ from state_utils import (
     get_proof_dir, get_archive_file, get_memory_items,
     count_completed_steps, get_step_by_status
 )
-from edge_config import ENTROPY_THRESHOLDS, MEMORY_SETTINGS, ARCHIVE_SETTINGS
+from edge_config import ENTROPY_THRESHOLDS, MEMORY_SETTINGS, ARCHIVE_SETTINGS, ARCHIVE_RETENTION
 
 
 # =============================================================================
@@ -350,10 +350,96 @@ def identify_prunable_mismatches(state):
     return prunable
 
 
+# =============================================================================
+# MEMORY DECAY HELPERS (extracted for clarity)
+# =============================================================================
+
+def parse_last_used_date(last_used: str) -> datetime:
+    """
+    Parse a last_used date string into a datetime object.
+
+    Handles both formats:
+    - Full ISO datetime: "2026-01-13T12:00:00"
+    - Date only: "2026-01-13"
+
+    Returns:
+        datetime object, or None if parsing fails
+    """
+    if not last_used:
+        return None
+    try:
+        if 'T' in last_used:
+            return datetime.fromisoformat(last_used.replace('Z', '+00:00'))
+        else:
+            return datetime.strptime(last_used, '%Y-%m-%d')
+    except (ValueError, TypeError):
+        return None
+
+
+def is_lesson_vital(trigger: str) -> bool:
+    """
+    Check if a lesson is protected by proof vitality.
+
+    Uses lazy import to avoid circular dependency with proof_utils.
+
+    Returns:
+        True if lesson has recent proof observations, False otherwise
+    """
+    if not trigger:
+        return False
+
+    try:
+        from proof_utils import check_lesson_vitality
+        vitality_threshold = MEMORY_SETTINGS.get("vitality_threshold", 1)
+        vitality_lookback = MEMORY_SETTINGS.get("vitality_lookback_days", 14)
+        is_vital, _ = check_lesson_vitality(trigger, vitality_threshold, vitality_lookback)
+        return is_vital
+    except ImportError:
+        return False
+
+
+def check_lesson_decay(lesson: dict, days_threshold: int, now: datetime) -> tuple:
+    """
+    Check if a single lesson should decay.
+
+    Args:
+        lesson: The memory/lesson dict
+        days_threshold: Days of inactivity before decay
+        now: Current datetime for age calculation
+
+    Returns:
+        (should_decay: bool, reason: str or None)
+    """
+    reinforced = lesson.get('reinforced', 0)
+
+    # High-value lessons always stay
+    if reinforced >= MEMORY_SETTINGS["reinforcement_threshold"]:
+        return (False, None)
+
+    last_used = lesson.get('last_used', '')
+    last_dt = parse_last_used_date(last_used)
+
+    if last_dt:
+        days_old = (now - last_dt).days
+
+        # Unreinforced and old enough to decay
+        if reinforced == 0 and days_old >= days_threshold:
+            return (True, f"Unreinforced for {days_old} days")
+        elif reinforced == 1 and days_old >= 7:
+            return (True, f"Single use, {days_old} days old")
+    elif reinforced == 0:
+        # No last_used date and never reinforced
+        return (True, "Never used, no date")
+
+    return (False, None)
+
+
 def identify_decayed_memory(state, days_threshold=None):
     """
     Identify memory items that should decay out.
-    Rules:
+    Rules (in priority order):
+    - evergreen: true: Keep (v3.10)
+    - proof vitality >= threshold: Keep (v3.10.1 - observations override claims)
     - reinforced >= 2: Keep
     - reinforced == 1 and used within 7 days: Keep
     - reinforced == 0 and unused for days_threshold: Decay
@@ -372,37 +458,138 @@ def identify_decayed_memory(state, days_threshold=None):
         if not isinstance(m, dict):
             continue
 
-        reinforced = m.get('reinforced', 0)
-
-        # High-value lessons always stay
-        if reinforced >= MEMORY_SETTINGS["reinforcement_threshold"]:
+        # Evergreen lessons never decay (v3.10)
+        if m.get('evergreen'):
             continue
 
-        last_used = m.get('last_used', '')
-        if last_used:
-            try:
-                # Parse date (could be just date or full datetime)
-                if 'T' in last_used:
-                    last_dt = datetime.fromisoformat(last_used.replace('Z', '+00:00'))
-                else:
-                    last_dt = datetime.strptime(last_used, '%Y-%m-%d')
+        # Proof-grounded vitality check (v3.10.1)
+        if is_lesson_vital(m.get('trigger', '')):
+            continue  # Protected by proof vitality
 
-                days_old = (now - last_dt).days
-
-                # Unreinforced and old enough to decay
-                if reinforced == 0 and days_old >= days_threshold:
-                    decayed.append((m, f"Unreinforced for {days_old} days"))
-                elif reinforced == 1 and days_old >= 7:
-                    # Single reinforcement but getting stale
-                    decayed.append((m, f"Single use, {days_old} days old"))
-            except (ValueError, TypeError):
-                # Can't parse date, keep it for now
-                pass
-        elif reinforced == 0:
-            # No last_used date and never reinforced - candidate for decay
-            decayed.append((m, "Never used, no date"))
+        # Check if lesson should decay based on reinforcement and age
+        should_decay, reason = check_lesson_decay(m, days_threshold, now)
+        if should_decay:
+            decayed.append((m, reason))
 
     return decayed
+
+
+def get_vitality_protected_lessons(state):
+    """
+    Identify lessons that would decay but are protected by proof vitality (v3.10.1).
+
+    Returns list of (lesson, vitality_info) tuples for lessons where:
+    - Would normally decay (low reinforcement, old)
+    - But proof shows recent usage (vitality >= threshold)
+    """
+    if not state:
+        return []
+
+    memory = get_memory_items(state)
+    protected = []
+
+    # Import proof vitality checker (lazy to avoid circular imports)
+    try:
+        from proof_utils import get_proof_vitality
+        vitality_threshold = MEMORY_SETTINGS.get("vitality_threshold", 1)
+        vitality_lookback = MEMORY_SETTINGS.get("vitality_lookback_days", 14)
+    except ImportError:
+        return []
+
+    days_threshold = MEMORY_SETTINGS.get("decay_threshold_days", 14)
+    now = datetime.now()
+
+    for m in memory:
+        if not isinstance(m, dict):
+            continue
+
+        # Skip evergreen (different protection mechanism)
+        if m.get('evergreen'):
+            continue
+
+        reinforced = m.get('reinforced', 0)
+
+        # Only check lessons that would normally be decay candidates
+        if reinforced >= MEMORY_SETTINGS.get("reinforcement_threshold", 2):
+            continue
+
+        # Check if this lesson has proof vitality
+        trigger = m.get('trigger', '')
+        if trigger:
+            vitality = get_proof_vitality(trigger, vitality_lookback)
+            if vitality["matches"] >= vitality_threshold:
+                # This lesson would decay but is protected by vitality
+                last_used = m.get('last_used', '')
+                if last_used:
+                    try:
+                        if 'T' in last_used:
+                            last_dt = datetime.fromisoformat(last_used.replace('Z', '+00:00'))
+                        else:
+                            last_dt = datetime.strptime(last_used, '%Y-%m-%d')
+
+                        days_old = (now - last_dt).days
+
+                        # Would it have decayed?
+                        would_decay = (reinforced == 0 and days_old >= days_threshold) or \
+                                     (reinforced == 1 and days_old >= 7)
+
+                        if would_decay:
+                            protected.append((m, vitality))
+                    except (ValueError, TypeError):
+                        pass
+
+    return protected
+
+
+def get_memory_reconciliation_info(state):
+    """
+    Compare proof observations to YAML claims for memory items (v3.10.1).
+
+    Returns list of dicts showing discrepancies between:
+    - proof_matches: Actual usage observed in proof logs
+    - yaml_reinforced: Claimed reinforcement count in YAML
+
+    This helps Claude decide whether to manually update YAML counts.
+    """
+    if not state:
+        return []
+
+    memory = get_memory_items(state)
+    reconciliation = []
+
+    # Import proof vitality checker
+    try:
+        from proof_utils import get_proof_vitality
+        vitality_lookback = MEMORY_SETTINGS.get("vitality_lookback_days", 14)
+    except ImportError:
+        return []
+
+    for m in memory:
+        if not isinstance(m, dict):
+            continue
+
+        trigger = m.get('trigger', '')
+        if not trigger:
+            continue
+
+        yaml_reinforced = m.get('reinforced', 0)
+        vitality = get_proof_vitality(trigger, vitality_lookback)
+        proof_matches = vitality.get("matches", 0)
+
+        # Only report if there's a discrepancy (proof shows more usage than YAML claims)
+        if proof_matches > yaml_reinforced:
+            reconciliation.append({
+                "trigger": trigger,
+                "proof_matches": proof_matches,
+                "yaml_reinforced": yaml_reinforced,
+                "discrepancy": proof_matches - yaml_reinforced,
+                "last_match": vitality.get("last_match")
+            })
+
+    # Sort by discrepancy (biggest gaps first)
+    reconciliation.sort(key=lambda x: x["discrepancy"], reverse=True)
+
+    return reconciliation
 
 
 def compute_prune_plan(state):
@@ -436,3 +623,85 @@ def estimate_entropy_reduction(prune_plan):
             "memory": memory
         }
     }
+
+
+# =============================================================================
+# ARCHIVE RETENTION POLICY (v3.10 - Living Memory)
+# =============================================================================
+
+def cleanup_archive(dry_run=False):
+    """
+    Clean up archive based on type-specific retention policy.
+    Returns (entries_removed, entries_kept) or just analysis in dry_run mode.
+    """
+    archive_file = get_archive_file()
+    if not archive_file.exists():
+        return (0, 0) if not dry_run else {"removed": 0, "kept": 0, "by_type": {}}
+
+    now = datetime.now()
+    entries_to_keep = []
+    entries_removed = 0
+    by_type = {}
+
+    with open(archive_file, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+                entry_type = entry.get("type", "unknown")
+                timestamp_str = entry.get("timestamp", "")
+
+                # Get retention days for this type
+                retention_days = ARCHIVE_RETENTION.get(
+                    entry_type,
+                    ARCHIVE_RETENTION.get("default", 90)
+                )
+
+                # Track by type
+                if entry_type not in by_type:
+                    by_type[entry_type] = {"total": 0, "removed": 0, "kept": 0}
+                by_type[entry_type]["total"] += 1
+
+                # Parse timestamp and check age
+                try:
+                    if 'T' in timestamp_str:
+                        entry_time = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                    else:
+                        entry_time = datetime.strptime(timestamp_str, '%Y-%m-%d')
+
+                    days_old = (now - entry_time).days
+
+                    if days_old > retention_days:
+                        entries_removed += 1
+                        by_type[entry_type]["removed"] += 1
+                    else:
+                        entries_to_keep.append(entry)
+                        by_type[entry_type]["kept"] += 1
+                except (ValueError, TypeError):
+                    # Can't parse timestamp, keep it
+                    entries_to_keep.append(entry)
+                    by_type[entry_type]["kept"] += 1
+
+            except json.JSONDecodeError:
+                # Keep malformed entries
+                entries_to_keep.append({"_raw": line})
+
+    if dry_run:
+        return {
+            "removed": entries_removed,
+            "kept": len(entries_to_keep),
+            "by_type": by_type
+        }
+
+    # Write back cleaned archive
+    if entries_removed > 0:
+        with open(archive_file, 'w') as f:
+            for entry in entries_to_keep:
+                if "_raw" in entry:
+                    f.write(entry["_raw"] + "\n")
+                else:
+                    f.write(json.dumps(entry) + "\n")
+
+    return (entries_removed, len(entries_to_keep))

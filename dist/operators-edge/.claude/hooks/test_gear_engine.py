@@ -23,14 +23,15 @@ class TestGearStatePersistence(unittest.TestCase):
         self.assertEqual(state.current_gear, Gear.ACTIVE)
 
     def test_reset_gear_state(self):
-        """reset_gear_state should return default state."""
+        """reset_gear_state should return default state and error tuple."""
         from gear_engine import reset_gear_state
         from gear_config import Gear
 
-        with patch('gear_engine.save_gear_state'):
-            state = reset_gear_state()
+        with patch('gear_engine.save_gear_state', return_value=(True, None)):
+            state, error = reset_gear_state()
             self.assertEqual(state.current_gear, Gear.ACTIVE)
             self.assertEqual(state.iterations, 0)
+            self.assertIsNone(error)
 
 
 class TestExecuteTransition(unittest.TestCase):
@@ -86,6 +87,24 @@ class TestExecuteTransition(unittest.TestCase):
 
         self.assertEqual(result.current_gear, Gear.DREAM)
 
+    def test_active_to_dream_transition(self):
+        """Should transition from ACTIVE to DREAM."""
+        from gear_engine import execute_transition
+        from gear_config import Gear, GearTransition, GearState
+
+        initial = GearState(
+            current_gear=Gear.ACTIVE,
+            entered_at="2025-01-01",
+            iterations=2,
+            last_transition=None,
+            patrol_findings_count=0,
+            dream_proposals_count=0,
+        )
+
+        result = execute_transition(initial, GearTransition.ACTIVE_TO_DREAM)
+
+        self.assertEqual(result.current_gear, Gear.DREAM)
+
     def test_dream_to_active_transition(self):
         """Should transition from DREAM to ACTIVE."""
         from gear_engine import execute_transition
@@ -130,8 +149,8 @@ class TestFindTransition(unittest.TestCase):
         from gear_engine import _find_transition
         from gear_config import Gear
 
-        # ACTIVE to DREAM is not a direct transition
-        result = _find_transition(Gear.ACTIVE, Gear.DREAM)
+        # PATROL to PATROL is not a direct transition
+        result = _find_transition(Gear.PATROL, Gear.PATROL)
         self.assertIsNone(result)
 
 
@@ -147,6 +166,7 @@ class TestRunGearEngine(unittest.TestCase):
         from gear_config import Gear, get_default_gear_state
 
         mock_load.return_value = get_default_gear_state()
+        mock_save.return_value = (True, None)  # Success tuple
         mock_run.return_value = GearEngineResult(
             gear_executed=Gear.ACTIVE,
             transitioned=False,
@@ -177,6 +197,7 @@ class TestRunGearEngine(unittest.TestCase):
         from gear_engine import run_gear_engine, GearEngineResult
         from gear_config import Gear, GearState
 
+        mock_save.return_value = (True, None)  # Success tuple
         mock_load.return_value = GearState(
             current_gear=Gear.PATROL,
             entered_at="2025-01-01",

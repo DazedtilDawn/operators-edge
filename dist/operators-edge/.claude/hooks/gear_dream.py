@@ -303,6 +303,10 @@ def should_transition_from_dream(
     Returns:
         (should_transition, transition_type)
     """
+    # Do not transition on reflection errors
+    if result.error or not result.reflection_completed:
+        return False, None
+
     # If proposal generated and needs action -> wait for user
     if result.proposal:
         # Stay in Dream until user acts on proposal

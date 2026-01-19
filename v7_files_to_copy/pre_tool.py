@@ -1,0 +1,337 @@
+#!/usr/bin/env python3
+"""
+Operator's Edge - Pre-Tool Gate
+Unified enforcement before any tool execution.
+
+Enforces:
+1. Dangerous command blocking (rm -rf, git reset --hard, etc.)
+2. Deploy/push confirmation gates
+3. Retry blocking for repeated failures
+4. Plan requirement for file edits
+5. Graduated rules enforcement (v7.0 - proven lessons become rules)
+6. File context surfacing (v7.0 - related files, risks)
+
+v7.0 Paradigm Shift:
+- LESSONS → became RULES (enforcement, not suggestion)
+- PATTERNS → became CONTEXT (related files, not wisdom)
+- RHYTHM → removed (low value)
+
+Note: YOLO/Dispatch mode is handled by the /edge-yolo command orchestration,
+not by this hook. This hook only enforces safety constraints.
+"""
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+# Add hooks directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from edge_utils import (
+    load_yaml_state,
+    get_recent_failures,
+    respond,
+    get_state_dir,
+)
+
+
+def check_bash_command(cmd):
+    """
+    Gate Bash commands by risk level.
+    Returns: (decision, reason) or None to continue checking
+    """
+    cmd_norm = cmd.strip()
+
+    # HARD BLOCK - Never allow these
+    BLOCK_PATTERNS = [
+        (r"(^|\s|&&|\|)rm\s+-rf\s+/", "Blocked: rm -rf on root"),
+        (r"(^|\s|&&|\|)rm\s+-rf\s+~", "Blocked: rm -rf on home"),
+        (r"(^|\s|&&|\|)rm\s+-rf\s+\.\.", "Blocked: rm -rf on parent"),
+        (r"(^|\s|&&|\|)git\s+reset\s+--hard", "Blocked: git reset --hard"),
+        (r"(^|\s|&&|\|)git\s+clean\s+-fdx", "Blocked: git clean -fdx"),
+        (r"(^|\s|&&|\|)git\s+push\s+.*--force", "Blocked: force push"),
+        (r"(^|\s|&&|\|)chmod\s+-R\s+777", "Blocked: chmod 777 recursive"),
+        (r"(^|\s|&&|\|):()\s*{\s*:|:&\s*};:", "Blocked: fork bomb"),
+        (r"(^|\s|&&|\|)mkfs\.", "Blocked: filesystem format"),
+        (r"(^|\s|&&|\|)dd\s+if=.*/dev/", "Blocked: dd from device"),
+    ]
+
+    for pattern, reason in BLOCK_PATTERNS:
+        if re.search(pattern, cmd_norm, re.IGNORECASE):
+            return ("block", reason)
+
+    # ASK CONFIRMATION - Risky but sometimes necessary
+    ASK_PATTERNS = [
+        (r"(^|\s|&&|\|)git\s+push(\s|$)", "Confirm: git push"),
+        (r"(^|\s|&&|\|)rm\s+(-r\s+)?[^|&;]+", "Confirm: file deletion"),
+        (r"(^|\s|&&|\|)kubectl\s+", "Confirm: kubernetes operation"),
+        (r"(^|\s|&&|\|)terraform\s+", "Confirm: terraform operation"),
+        (r"(^|\s|&&|\|)docker\s+push", "Confirm: docker push"),
+        (r"(^|\s|&&|\|)npm\s+publish", "Confirm: npm publish"),
+        (r"(^|\s|&&|\|)aws\s+", "Confirm: AWS operation"),
+        (r"(^|\s|&&|\|)gcloud\s+", "Confirm: GCloud operation"),
+    ]
+
+    for pattern, reason in ASK_PATTERNS:
+        if re.search(pattern, cmd_norm, re.IGNORECASE):
+            return ("ask", f"{reason}: {cmd_norm[:80]}")
+
+    return None
+
+def check_retry_blocking(cmd):
+    """
+    Block commands that have failed recently without a new approach.
+    """
+    failures = get_recent_failures(cmd, window_minutes=15)
+    if failures >= 2:
+        return ("block",
+                f"This command failed {failures} times recently. "
+                "Explain your new approach before retrying.")
+    return None
+
+def check_plan_requirement(tool_name, tool_input):
+    """
+    Require a plan in active_context.yaml before allowing edits.
+    v3.5: Also requires risks to be identified (failure mode planning).
+    """
+    if tool_name not in ("Edit", "Write", "NotebookEdit"):
+        return None
+
+    # Allow writes to specific safe paths without any checks
+    file_path = tool_input.get("file_path", "")
+    safe_paths = [
+        "active_context.yaml",
+        ".proof/",
+        "checklist.md",
+        "archive.md"
+    ]
+    if any(safe in file_path for safe in safe_paths):
+        return None
+
+    state = load_yaml_state()
+    if state is None:
+        return ("block",
+                "Cannot edit files: active_context.yaml is missing or invalid. "
+                "Run /edge-plan first.")
+
+    plan = state.get("plan", [])
+    if not plan:
+        return ("ask",
+                "No plan exists in active_context.yaml. "
+                "Consider running /edge-plan first, or confirm to proceed without a plan.")
+
+    # v3.5: Require risks to be identified
+    risks = state.get("risks", [])
+    if not risks:
+        return ("ask",
+                "No risks identified in active_context.yaml. "
+                "What could go wrong? Add at least one risk before proceeding, "
+                "or confirm to proceed without failure mode planning.")
+
+    return None
+
+
+def check_graduated_rules(tool_name, tool_input):
+    """
+    v7.0: Enforce graduated rules (proven lessons that became enforcement).
+
+    Returns (action, message, rules_fired) if a blocking rule is violated.
+    Returns (None, None, rules_fired) if only warnings.
+    Returns (None, None, []) if no violations.
+    Non-blocking violations print to stderr as warnings.
+    """
+    rules_fired = []
+
+    try:
+        from rules_engine import check_rules, format_violations, get_blocking_violation
+
+        violations = check_rules(tool_name, tool_input)
+
+        if not violations:
+            return None, None, []
+
+        # Track which rules fired
+        rules_fired = [v.rule_id for v in violations]
+
+        # Check for blocking violations
+        blocking = get_blocking_violation(violations)
+        if blocking:
+            action, message = blocking.to_response()
+            return action, message, rules_fired
+
+        # Non-blocking: print warnings to stderr
+        formatted = format_violations(violations)
+        if formatted:
+            print(f"\n{formatted}\n", file=sys.stderr)
+
+        return None, None, rules_fired
+
+    except ImportError:
+        pass  # Rules engine not available
+    except Exception:
+        pass  # Don't fail the hook if rules check fails
+
+    return None, None, rules_fired
+
+
+def surface_file_context(tool_name, tool_input):
+    """
+    v7.0: Surface file context at decision time.
+
+    Shows CONTEXT (related files, risks) not WISDOM (lessons).
+    Lessons are now handled by rules_engine.py as enforcement.
+
+    Pattern types surfaced:
+    - COCHANGE: Files that changed together in git history
+    - RISK: Known risk patterns for this file/context
+
+    Pattern types NOT surfaced (handled elsewhere or cut):
+    - LESSON: Handled by rules_engine.py as enforcement
+    - RHYTHM: Low value, removed
+
+    Returns (context_string, context_list) where context_list is for tracking.
+    """
+    # Only surface for file modifications
+    if tool_name not in ("Edit", "Write", "NotebookEdit"):
+        return "", []
+
+    file_path = tool_input.get("file_path", "")
+    if not file_path:
+        return "", []
+
+    # Skip for safe/internal paths
+    safe_paths = ["active_context.yaml", ".proof/", "checklist.md", "archive.md"]
+    if any(safe in file_path for safe in safe_paths):
+        return "", []
+
+    # Load state for context extraction
+    state = load_yaml_state()
+    if not state:
+        return "", []
+
+    # Build context from file path and current objective/step
+    context_parts = [file_path]
+    if state.get("objective"):
+        context_parts.append(state["objective"])
+
+    plan = state.get("plan", [])
+    for step in plan:
+        if isinstance(step, dict) and step.get("status") == "in_progress":
+            context_parts.append(step.get("description", ""))
+            break
+
+    context = " ".join(context_parts)
+    context_shown = []
+
+    try:
+        from pattern_engine import surface_patterns, PatternType
+
+        bundle = surface_patterns(
+            state=state,
+            context=context,
+            intent_action="file_modify",
+            max_patterns=5  # Get more, we'll filter
+        )
+
+        if not bundle.patterns:
+            return "", []
+
+        # v7.0: Filter to only CONTEXT patterns (not LESSON/RHYTHM)
+        context_patterns = [
+            p for p in bundle.patterns
+            if p.type in (PatternType.COCHANGE, PatternType.RISK)
+        ]
+
+        if not context_patterns:
+            return "", []
+
+        # Format as context, not hints
+        lines = ["📁 **File context:**"]
+        for p in context_patterns[:3]:  # Max 3 context items
+            if p.type == PatternType.COCHANGE:
+                lines.append(f"  🔗 {p.content[:100]}")
+                context_shown.append(f"cochange:{p.content[:50]}")
+            elif p.type == PatternType.RISK:
+                lines.append(f"  ⚠️ {p.content[:100]}")
+                context_shown.append(f"risk:{p.content[:50]}")
+
+        return "\n".join(lines), context_shown
+
+    except ImportError:
+        pass  # Pattern engine not available
+    except Exception:
+        pass  # Don't fail the hook if context fails
+
+    return "", []
+
+def main():
+    try:
+        data = json.load(sys.stdin)
+    except json.JSONDecodeError:
+        respond("approve", "Could not parse input, allowing by default")
+        return
+
+    tool_name = data.get("tool_name", "")
+    tool_input = data.get("tool_input", {}) or {}
+
+    # Check 1: Bash-specific risk gating
+    if tool_name == "Bash":
+        cmd = tool_input.get("command", "")
+
+        # Check dangerous commands (hard block)
+        result = check_bash_command(cmd)
+        if result and result[0] == "block":
+            respond(*result)
+
+        # Check retry blocking
+        retry_result = check_retry_blocking(cmd)
+        if retry_result:
+            respond(*retry_result)
+
+        # If we had an "ask" from bash check (not hard block), apply it now
+        if result and result[0] == "ask":
+            respond(*result)
+
+    # Check 2: Plan requirement for edits
+    result = check_plan_requirement(tool_name, tool_input)
+    if result:
+        respond(*result)
+
+    # Check 3: Graduated rules enforcement (v7.0)
+    # Proven lessons become enforceable rules
+    action, message, rules_fired = check_graduated_rules(tool_name, tool_input)
+
+    # Check 4: Surface file context (v7.0)
+    # Shows CONTEXT (related files, risks) not WISDOM (lessons)
+    # Lessons are handled by rules (Check 3)
+    file_context, context_shown = surface_file_context(tool_name, tool_input)
+    if file_context:
+        print(f"\n{file_context}\n", file=sys.stderr)
+
+    # v7.0: Log surface event for outcome tracking
+    if rules_fired or context_shown:
+        try:
+            from outcome_tracker import generate_correlation_id, log_surface_event
+            file_path = tool_input.get("file_path", "")
+            corr_id = generate_correlation_id()
+            log_surface_event(
+                correlation_id=corr_id,
+                file_path=file_path,
+                rules_fired=rules_fired,
+                context_shown=context_shown,
+                tool_name=tool_name
+            )
+        except ImportError:
+            pass  # Outcome tracker not available
+        except Exception:
+            pass  # Don't fail the hook if tracking fails
+
+    # If rules had a blocking violation, respond now
+    if action:
+        respond(action, message)
+
+    # All checks passed
+    respond("approve", "Passed all pre-tool checks")
+
+if __name__ == "__main__":
+    main()

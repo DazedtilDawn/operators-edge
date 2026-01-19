@@ -205,6 +205,7 @@ class TestHandleStop:
         gear_state.dream_proposals_count = 2
         gear_state.iterations = 10
         mock_gear.return_value = gear_state
+        mock_reset.return_value = (get_default_gear_state(), None)  # (state, error) tuple
 
         result = handle_stop()
         assert "DISPATCH STOPPED" in result
@@ -233,6 +234,7 @@ class TestHandleJunctionActions:
     def test_stop_resets_state(self, mock_reset, mock_gear):
         """Stop should reset gear state."""
         mock_gear.return_value = get_default_gear_state()
+        mock_reset.return_value = (get_default_gear_state(), None)  # (state, error) tuple
 
         handle_stop()
         mock_reset.assert_called_once()

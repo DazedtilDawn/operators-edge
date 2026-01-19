@@ -1,0 +1,35 @@
+# Test Active Context for Pattern Surfacing Demo
+objective: "Add dark mode toggle to the settings page"
+mode: ACTIVE
+
+plan:
+  - description: "Create ThemeContext.tsx with dark/light state"
+    status: in_progress
+  - description: "Add CSS variables for theme colors"
+    status: pending
+  - description: "Update settings page with toggle"
+    status: pending
+
+memory:
+  - trigger: "theme css dark"
+    lesson: "Use CSS variables for theming - they cascade naturally and work with media queries"
+    reinforced: 3
+    last_used: "2025-01-10"
+  - trigger: "react context provider"
+    lesson: "Wrap the context provider at the app root, not inside components"
+    reinforced: 2
+    last_used: "2025-01-12"
+  - trigger: "tsx component"
+    lesson: "Always add 'use client' directive for client-side React components in Next.js"
+    reinforced: 1
+    last_used: "2025-01-14"
+  - trigger: "hooks enforcement policy"
+    lesson: "Policy is not enforcement - hooks are enforcement. Write hooks to enforce policies."
+    reinforced: 32
+    evergreen: true
+    last_used: "2025-01-15"
+
+risks:
+  - risk: "CSS variable browser support"
+    mitigation: "Check caniuse.com, add fallbacks for IE11"
+    status: active

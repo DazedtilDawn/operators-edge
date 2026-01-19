@@ -1,0 +1,11 @@
+{
+  "enabled": true,
+  "api_token": "pk_43736999_QFBBZ10ZJF89WY4NZQ3ENN7MR104ANQB",
+  "default_list_id": "901323811137",
+  "default_space_id": "901312507985",
+  "status_mapping": {
+    "objective_set": "in development",
+    "objective_complete": "shipped",
+    "objective_blocked": "backlog"
+  }
+}

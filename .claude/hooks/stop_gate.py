@@ -15,6 +15,10 @@ Warnings (v2):
 4. High entropy should be pruned
 5. In-progress steps should be resolved
 
+v8.0 Additions:
+6. Generate session handoff for continuity
+7. Save session metrics (v8.0 Phase 5 - Observability)
+
 This is the key enforcement mechanism - you cannot claim "done"
 without actually changing state and having proof of work.
 """
@@ -166,6 +170,121 @@ def check_eval_activity():
 
     return (True, "No eval activity recorded this session")
 
+
+def generate_session_handoff():
+    """
+    v8.0: Generate handoff summary for the next session.
+
+    This creates a structured summary of:
+    - Current objective and progress
+    - Approaches tried and their outcomes
+    - Drift warnings encountered
+    - Files with high churn
+    - Context usage stats
+
+    The handoff is saved and will be surfaced at the next session start.
+    """
+    try:
+        from session_handoff import generate_handoff_summary, save_handoff
+        from proof_utils import get_session_log_path, get_current_session_id
+
+        state = load_yaml_state()
+        if not state:
+            return (True, "No state for handoff")
+
+        session_log = get_session_log_path()
+        if not session_log or not session_log.exists():
+            return (True, "No session log for handoff")
+
+        session_id = get_current_session_id() or ""
+
+        # Generate handoff
+        handoff = generate_handoff_summary(state, session_log, session_id)
+
+        # Save it
+        filepath = save_handoff(handoff)
+
+        # v8.0 Phase 5: Record handoff generated in metrics
+        try:
+            from session_metrics import record_handoff_generated
+            record_handoff_generated()
+        except ImportError:
+            pass
+
+        return (True, f"Session handoff saved ({handoff.progress})")
+
+    except ImportError:
+        return (True, "Handoff module not available")
+    except Exception as e:
+        return (True, f"Handoff generation failed: {e}")
+
+
+def save_session_metrics_final():
+    """
+    v8.0 Phase 5: Save session metrics to disk.
+
+    Called at session end to persist all collected metrics.
+    """
+    try:
+        from session_metrics import (
+            save_session_metrics,
+            update_context_metrics,
+            update_objective_metrics,
+            get_current_metrics
+        )
+        from context_monitor import estimate_context_usage
+        from proof_utils import get_session_log_path
+
+        # Get final context metrics
+        session_log = get_session_log_path()
+        if session_log and session_log.exists():
+            try:
+                estimate = estimate_context_usage(session_log)
+                update_context_metrics(
+                    duration_minutes=estimate.session_duration_minutes,
+                    tool_calls=estimate.tool_calls,
+                    files_read=estimate.files_read,
+                    files_modified=estimate.files_written,
+                    final_usage=estimate.usage_percentage * 100
+                )
+            except Exception:
+                pass
+
+        # Get objective completion metrics from state
+        state = load_yaml_state()
+        if state:
+            plan = state.get("plan", [])
+            completed_steps = sum(
+                1 for s in plan
+                if isinstance(s, dict) and s.get("status") == "completed"
+            )
+            total_steps = len(plan)
+            objective_completed = (
+                completed_steps == total_steps and total_steps > 0
+            )
+
+            update_objective_metrics(
+                completed=objective_completed,
+                steps_done=completed_steps,
+                steps_total=total_steps
+            )
+
+            # Set objective in metrics
+            metrics = get_current_metrics()
+            if metrics and state.get("objective"):
+                metrics.objective = state.get("objective", "")
+
+        # Save to disk
+        filepath = save_session_metrics()
+        if filepath:
+            return (True, "Session metrics saved")
+        return (True, "No metrics to save")
+
+    except ImportError:
+        return (True, "Metrics module not available")
+    except Exception as e:
+        return (True, f"Metrics save failed: {e}")
+
 def main():
     all_passed = True
     messages = []
@@ -212,6 +331,18 @@ def main():
     passed, msg = check_eval_activity()
     if "no eval activity" in msg.lower():
         messages.append(f"WARNING: {msg}")
+
+    # v8.0: Generate session handoff for continuity
+    # This happens regardless of pass/fail - we want to capture context
+    passed, msg = generate_session_handoff()
+    if "saved" in msg.lower():
+        messages.append(f"OK: {msg}")
+
+    # v8.0 Phase 5: Save session metrics
+    # This happens regardless of pass/fail - we want to track everything
+    passed, msg = save_session_metrics_final()
+    if "saved" in msg.lower():
+        messages.append(f"OK: {msg}")
 
     # Final decision
     if all_passed:

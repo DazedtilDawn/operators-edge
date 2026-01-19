@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Operator's Edge v2.6 - Session Start Hook
+Operator's Edge v3.0 - Session Start Hook
 Initializes session state and captures baseline for verification.
 
 Actions:
@@ -10,7 +10,8 @@ Actions:
 4. Surfaces relevant memory (v2)
 5. Warns about entropy issues (v2)
 6. Shows unresolved mismatches (v2)
-7. Shows YOLO mode status (v2.6)
+7. Shows Dispatch Mode status (v3.0 - canonical from dispatch_utils)
+8. Injects previous session handoff (v8.0 - context engineering)
 """
 import json
 import os
@@ -35,8 +36,10 @@ from edge_utils import (
     get_orchestrator_suggestion,
     load_archive,
     generate_reflection_summary,
-    get_default_yolo_state
 )
+from proof_utils import initialize_proof_session, archive_old_sessions
+from archive_utils import cleanup_archive
+from dispatch_utils import get_dispatch_status
 
 def generate_session_id():
     """Generate a unique session ID."""
@@ -50,17 +53,6 @@ def clear_old_state():
         failure_log.unlink()
 
 
-def load_yolo_state():
-    """Load YOLO mode state from file."""
-    state_dir = get_state_dir()
-    yolo_file = state_dir / "yolo_state.json"
-    if yolo_file.exists():
-        try:
-            with open(yolo_file, 'r') as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError):
-            pass
-    return get_default_yolo_state()
 
 def _output_plan(state):
     """Output the plan section."""
@@ -88,18 +80,41 @@ def _output_constraints(constraints):
 
 
 def _output_memory(memory):
-    """Output the memory/lessons section."""
-    if memory:
-        print(f"\nLessons from previous work:")
-        for m in memory:
-            if isinstance(m, dict):
-                trigger = m.get('trigger', '*')
-                lesson = m.get('lesson', str(m))
-                reinforced = m.get('reinforced', 0)
-                strength = "+" * min(reinforced, 3) if reinforced > 0 else ""
-                print(f"  - {strength} When [{trigger}]: {lesson}")
-            else:
-                print(f"  - {m}")
+    """
+    Output top lessons only.
+
+    v7.0: Reduced from dumping all lessons to showing only top 3.
+    Lessons are already:
+    - Enforced by rules_engine.py at PreToolUse
+    - Surfaced contextually by surface_relevant_memory() at decision time
+
+    Showing all 20+ lessons was context pollution and KV-cache breakage.
+    """
+    if not memory:
+        return
+
+    # Sort by: evergreen first, then by reinforcement count
+    scored = []
+    for m in memory:
+        if isinstance(m, dict):
+            score = 1000 if m.get('evergreen', False) else m.get('reinforced', 0)
+            scored.append((score, m))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top_lessons = [m for _, m in scored[:3]]
+
+    if top_lessons:
+        total = len(memory)
+        print(f"\nTop lessons ({len(top_lessons)} of {total}, more surfaced at decision time):")
+        for m in top_lessons:
+            trigger = m.get('trigger', '*')
+            lesson = m.get('lesson', str(m))
+            evergreen = m.get('evergreen', False)
+            prefix = "★" if evergreen else "•"
+            # Truncate long lessons for cleaner output
+            if len(lesson) > 80:
+                lesson = lesson[:77] + "..."
+            print(f"  {prefix} [{trigger}]: {lesson}")
 
 
 def _output_warnings(state):
@@ -159,17 +174,27 @@ def _sync_clickup(state):
         return None  # ClickUp integration not available
 
 
-def _output_yolo_status(state, yolo_state):
-    """Output YOLO mode status."""
-    if yolo_state.get("enabled"):
-        stats = yolo_state.get("stats", {})
-        staged = len(yolo_state.get("staged_actions", []))
-        auto = stats.get("auto_executed", 0)
-        blocked = stats.get("blocked", 0)
-        print(f"\n🚀 YOLO MODE: ENABLED")
-        print(f"  Auto-executed: {auto} | Staged: {staged} | Blocked: {blocked}")
-        if staged > 0:
-            print(f"  ⚠️  {staged} actions staged - run /edge-yolo to review")
+def _output_dispatch_status(state):
+    """Output Dispatch Mode status (canonical source: dispatch_utils)."""
+    dispatch = get_dispatch_status()
+
+    if dispatch.get("enabled"):
+        stats = dispatch.get("stats", {})
+        iteration = dispatch.get("iteration", 0)
+        junction = dispatch.get("junction")
+        dispatch_state = dispatch.get("state", "stopped")
+
+        print(f"\n🚀 DISPATCH MODE: {dispatch_state.upper()}")
+        print(f"  Iterations: {iteration} | Junctions: {stats.get('junctions_hit', 0)}")
+
+        if junction:
+            junction_type = junction.get("type", "unknown") if isinstance(junction, dict) else "pending"
+            print(f"  ⚠️  Junction pending: {junction_type}")
+            print(f"      Run /edge-yolo approve|skip|dismiss to continue")
+
+        if dispatch.get("stuck_count", 0) > 0:
+            print(f"  ⚠️  Stuck count: {dispatch.get('stuck_count')} - may need adaptation")
+
         print(f"  Tip: /edge-yolo off to disable")
     elif state.get("objective") and state.get("plan"):
         print(f"\n💡 Tip: Run /edge-yolo on for autonomous mode")
@@ -183,9 +208,71 @@ def _output_suggestion(state):
         print(f"\nSuggested: {suggestion['message']}")
 
 
+def _output_pattern_guidance(state):
+    """
+    Output pattern suggestion if in plan mode with objective but no plan.
+
+    v7.1: Surfaces learned guidance from past similar objectives.
+    DEPRECATED: v8.0 moved to context engineering, not pattern teaching.
+    """
+    mode = state.get("mode", "")
+    objective = state.get("objective", "")
+    plan = state.get("plan", [])
+
+    # Only show in plan mode when there's an objective but no plan yet
+    if mode != "plan" or not objective or (plan and len(plan) > 0):
+        return
+
+    # Skip placeholder objectives
+    if objective.lower() in ("set your objective here", "null", ""):
+        return
+
+    try:
+        from pattern_recognition import suggest_approach_for_objective
+        suggestion_text, pattern_match = suggest_approach_for_objective(objective)
+
+        if suggestion_text and pattern_match:
+            print("\n" + "-" * 60)
+            print("🎯 LEARNED GUIDANCE - Suggested Approach")
+            print("-" * 60)
+            print(suggestion_text)
+            print("-" * 60)
+            print("Use /edge to start planning (suggestion above is optional)")
+    except ImportError:
+        pass  # pattern_recognition not available
+    except Exception:
+        pass  # Suggestion failure shouldn't block session start
+
+
+def _output_session_handoff():
+    """
+    v8.0: Output previous session handoff for continuity.
+
+    This surfaces key information from the last session:
+    - Where we left off
+    - Approaches tried (and their outcomes)
+    - Drift warnings
+    - Churned files
+    """
+    try:
+        from session_handoff import get_handoff_for_new_session
+
+        handoff_text = get_handoff_for_new_session()
+        if handoff_text:
+            print(handoff_text)
+
+    except ImportError:
+        pass  # session_handoff not available
+    except Exception:
+        pass  # Handoff failure shouldn't block session start
+
+
 def output_context():
     """Output current state for Claude to see."""
     state = load_yaml_state()
+
+    # v8.0: Inject previous session handoff first (most important context)
+    _output_session_handoff()
 
     print("=" * 60)
     print("OPERATOR'S EDGE - Session Initialized")
@@ -201,8 +288,9 @@ def output_context():
         _output_warnings(state)
         _output_reflection()
         _sync_clickup(state)
-        _output_yolo_status(state, load_yolo_state())
+        _output_dispatch_status(state)
         _output_suggestion(state)
+        _output_pattern_guidance(state)  # v7.1: Learned guidance
     else:
         print("\nWARNING: active_context.yaml missing or invalid!")
         print("Create it or run /edge-plan to initialize.")
@@ -224,9 +312,37 @@ def main():
     proof_dir = get_proof_dir()
     proof_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save session ID
+    # Generate and save session ID
     session_id = generate_session_id()
     (state_dir / "session_id").write_text(session_id)
+
+    # Initialize proof session (session-scoped logs with symlink)
+    initialize_proof_session(session_id)
+
+    # Archive old session logs (retention policy: 7 days)
+    try:
+        archived = archive_old_sessions()
+        if archived > 0:
+            print(f"[Proof] Archived {archived} old session log(s)")
+    except Exception:
+        pass  # Best effort cleanup
+
+    # v3.10: Archive retention cleanup (type-based retention)
+    try:
+        removed, kept = cleanup_archive()
+        if removed > 0:
+            print(f"[Archive] Cleaned {removed} expired entries ({kept} remaining)")
+    except Exception:
+        pass  # Best effort cleanup
+
+    # v7.0: Auto-archive completed steps to keep active_context slim
+    try:
+        from state_utils import auto_archive_completed_steps
+        archived_steps, msg = auto_archive_completed_steps(max_completed=3)
+        if archived_steps > 0:
+            print(f"[Context] {msg}")
+    except Exception:
+        pass  # Best effort cleanup
 
     # Capture starting hash of state file
     start_hash = save_state_hash()

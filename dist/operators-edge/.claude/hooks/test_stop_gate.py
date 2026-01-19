@@ -79,49 +79,59 @@ class TestCheckStateModified(unittest.TestCase):
 class TestCheckProofExists(unittest.TestCase):
     """Tests for check_proof_exists() function."""
 
-    @patch('stop_gate.get_proof_dir')
-    def test_proof_exists_with_entries(self, mock_proof_dir):
+    @patch('stop_gate.check_proof_for_session')
+    def test_proof_exists_with_entries(self, mock_check):
         """When proof log has entries, return True."""
         from stop_gate import check_proof_exists
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mock_proof_dir.return_value = Path(tmpdir)
+        mock_check.return_value = (True, "Proof log has 5 entries", 5)
 
-            # Create proof log with entries
-            log_file = Path(tmpdir) / "session_log.jsonl"
-            log_file.write_text('{"tool": "Read", "timestamp": "2025-01-01"}\n')
+        passed, msg = check_proof_exists()
+        self.assertTrue(passed)
+        self.assertIn("5 entries", msg)
 
-            passed, msg = check_proof_exists()
-            self.assertTrue(passed)
-            self.assertIn("1 entries", msg)
-
-    @patch('stop_gate.get_proof_dir')
-    def test_no_proof_file_returns_false(self, mock_proof_dir):
-        """When proof log doesn't exist, return False (blocking)."""
+    @patch('stop_gate.graceful_fallback')
+    @patch('stop_gate.recover_proof_from_state')
+    @patch('stop_gate.check_proof_for_session')
+    def test_no_proof_file_with_recovery(self, mock_check, mock_recover, mock_fallback):
+        """When proof log missing but state changed, recovery creates proof."""
         from stop_gate import check_proof_exists
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mock_proof_dir.return_value = Path(tmpdir)
-            # Don't create the file
+        mock_check.return_value = (False, "No proof log", 0)
+        mock_recover.return_value = (True, "Proof recovered from state modification")
 
-            passed, msg = check_proof_exists()
-            self.assertFalse(passed)
-            self.assertIn("No proof log", msg)
+        passed, msg = check_proof_exists()
+        self.assertTrue(passed)
+        self.assertIn("recovered", msg.lower())
 
-    @patch('stop_gate.get_proof_dir')
-    def test_empty_proof_file_returns_false(self, mock_proof_dir):
-        """When proof log is empty, return False (blocking)."""
+    @patch('stop_gate.graceful_fallback')
+    @patch('stop_gate.recover_proof_from_state')
+    @patch('stop_gate.check_proof_for_session')
+    def test_no_proof_graceful_fallback(self, mock_check, mock_recover, mock_fallback):
+        """When proof missing and recovery fails, graceful fallback allows exit."""
         from stop_gate import check_proof_exists
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mock_proof_dir.return_value = Path(tmpdir)
+        mock_check.return_value = (False, "No proof log", 0)
+        mock_recover.return_value = (False, "No state change")
+        mock_fallback.return_value = (True, "WARNING: No session tracking")
 
-            log_file = Path(tmpdir) / "session_log.jsonl"
-            log_file.write_text("")
+        passed, msg = check_proof_exists()
+        self.assertTrue(passed)  # Graceful fallback allows exit
+        self.assertIn("WARNING", msg)
 
-            passed, msg = check_proof_exists()
-            self.assertFalse(passed)
-            self.assertIn("empty", msg.lower())
+    @patch('stop_gate.graceful_fallback')
+    @patch('stop_gate.recover_proof_from_state')
+    @patch('stop_gate.check_proof_for_session')
+    def test_truly_empty_session_blocks(self, mock_check, mock_recover, mock_fallback):
+        """When truly nothing happened, block exit."""
+        from stop_gate import check_proof_exists
+
+        mock_check.return_value = (False, "No proof log", 0)
+        mock_recover.return_value = (False, "No state change")
+        mock_fallback.return_value = (False, "No evidence of work")
+
+        passed, msg = check_proof_exists()
+        self.assertFalse(passed)  # Block when truly empty
 
 
 class TestCheckNoInProgressSteps(unittest.TestCase):

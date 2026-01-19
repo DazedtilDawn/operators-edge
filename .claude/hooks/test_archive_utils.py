@@ -10,6 +10,7 @@ Tests the core functions for:
 """
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -748,6 +749,315 @@ class TestCleanupArchive(unittest.TestCase):
             self.assertEqual(len(lines), 1)  # Only one entry left
         finally:
             os.unlink(temp_path)
+
+
+# =============================================================================
+# v7.1 - LEARNED GUIDANCE CAPTURE TESTS
+# =============================================================================
+
+class TestLoadVerbTaxonomy(unittest.TestCase):
+    """Tests for _load_verb_taxonomy()."""
+
+    def test_loads_taxonomy_from_config(self):
+        """_load_verb_taxonomy() should load verb definitions from YAML."""
+        from archive_utils import _load_verb_taxonomy
+
+        taxonomy = _load_verb_taxonomy()
+
+        self.assertIsInstance(taxonomy, dict)
+        # Should have canonical verbs from guidance_config.yaml
+        self.assertIn("scope", taxonomy)
+        self.assertIn("test", taxonomy)
+        self.assertIn("build", taxonomy)
+
+    def test_scope_has_synonyms(self):
+        """scope verb should have synonyms list."""
+        from archive_utils import _load_verb_taxonomy
+
+        taxonomy = _load_verb_taxonomy()
+
+        scope = taxonomy.get("scope", {})
+        synonyms = scope.get("synonyms", [])
+        self.assertIn("define", synonyms)
+        self.assertIn("identify", synonyms)
+
+    def test_fallback_when_yaml_unavailable(self):
+        """_load_verb_taxonomy() should use defaults when yaml import fails."""
+        from archive_utils import _get_default_taxonomy
+
+        # The default taxonomy should have all 10 canonical verbs
+        defaults = _get_default_taxonomy()
+
+        self.assertEqual(len(defaults), 10)
+        for verb in ["scope", "plan", "test", "build", "extract",
+                     "integrate", "fix", "clean", "document", "deploy"]:
+            self.assertIn(verb, defaults)
+            self.assertIn("synonyms", defaults[verb])
+
+
+class TestNormalizeStepToVerb(unittest.TestCase):
+    """Tests for _normalize_step_to_verb()."""
+
+    def test_normalizes_scope_synonyms(self):
+        """Should map 'define' and 'identify' to 'scope'."""
+        from archive_utils import _normalize_step_to_verb, _load_verb_taxonomy
+
+        taxonomy = _load_verb_taxonomy()
+
+        self.assertEqual(_normalize_step_to_verb("Define the boundaries", taxonomy), "scope")
+        self.assertEqual(_normalize_step_to_verb("Identify files to change", taxonomy), "scope")
+
+    def test_normalizes_test_synonyms(self):
+        """Should map 'verify' and 'validate' to 'test'."""
+        from archive_utils import _normalize_step_to_verb, _load_verb_taxonomy
+
+        taxonomy = _load_verb_taxonomy()
+
+        self.assertEqual(_normalize_step_to_verb("Verify tests pass", taxonomy), "test")
+        self.assertEqual(_normalize_step_to_verb("Validate implementation", taxonomy), "test")
+
+    def test_returns_other_for_unknown(self):
+        """Should return 'other' for unmatched steps."""
+        from archive_utils import _normalize_step_to_verb, _load_verb_taxonomy
+
+        taxonomy = _load_verb_taxonomy()
+
+        self.assertEqual(_normalize_step_to_verb("Ponder the meaning of life", taxonomy), "other")
+
+
+class TestExtractApproachSummary(unittest.TestCase):
+    """Tests for _extract_approach_summary()."""
+
+    def test_extracts_completed_steps(self):
+        """Should extract normalized verbs from completed steps."""
+        from archive_utils import _extract_approach_summary, _load_verb_taxonomy
+
+        taxonomy = _load_verb_taxonomy()
+        plan = [
+            {"description": "Define requirements", "status": "completed", "proof": "Done"},
+            {"description": "Write tests", "status": "completed", "proof": "Tests pass"},
+            {"description": "Pending work", "status": "pending"},
+        ]
+
+        result = _extract_approach_summary(plan, taxonomy)
+
+        self.assertEqual(len(result), 2)  # Only completed steps
+        self.assertEqual(result[0]["verb"], "scope")  # 'Define' → 'scope'
+        self.assertEqual(result[1]["verb"], "test")   # 'Write tests' → 'test'
+
+    def test_preserves_proof(self):
+        """Should preserve proof from completed steps."""
+        from archive_utils import _extract_approach_summary, _load_verb_taxonomy
+
+        taxonomy = _load_verb_taxonomy()
+        plan = [
+            {"description": "Test the system", "status": "completed", "proof": "All 50 tests pass"},
+        ]
+
+        result = _extract_approach_summary(plan, taxonomy)
+
+        self.assertEqual(result[0]["proof"], "All 50 tests pass")
+
+
+class TestComputeObjectiveMetrics(unittest.TestCase):
+    """Tests for _compute_objective_metrics()."""
+
+    def test_counts_steps(self):
+        """Should count planned, completed, and abandoned steps."""
+        from archive_utils import _compute_objective_metrics
+
+        state = {
+            "plan": [
+                {"status": "completed"},
+                {"status": "completed"},
+                {"status": "pending"},
+                {"status": "in_progress"},
+            ]
+        }
+
+        metrics = _compute_objective_metrics(state)
+
+        self.assertEqual(metrics["steps_planned"], 4)
+        self.assertEqual(metrics["steps_completed"], 2)
+        self.assertEqual(metrics["steps_abandoned"], 2)  # pending + in_progress
+
+
+class TestInferTagsFromObjective(unittest.TestCase):
+    """Tests for _infer_tags_from_objective()."""
+
+    def test_infers_refactoring(self):
+        """Should infer 'refactoring' from keywords."""
+        from archive_utils import _infer_tags_from_objective
+
+        tags = _infer_tags_from_objective("Refactor the authentication module")
+        self.assertIn("refactoring", tags)
+
+    def test_infers_feature(self):
+        """Should infer 'feature' from keywords."""
+        from archive_utils import _infer_tags_from_objective
+
+        tags = _infer_tags_from_objective("Add new login feature")
+        self.assertIn("feature", tags)
+
+    def test_infers_testing(self):
+        """Should infer 'testing' from keywords."""
+        from archive_utils import _infer_tags_from_objective
+
+        tags = _infer_tags_from_objective("Write unit tests for API")
+        self.assertIn("testing", tags)
+
+
+class TestCaptureObjectiveCompletion(unittest.TestCase):
+    """Tests for capture_objective_completion()."""
+
+    def setUp(self):
+        """Create temp directory for archive."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.archive_path = Path(self.temp_dir) / ".proof" / "archive.jsonl"
+        self.archive_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        """Clean up temp directory."""
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_captures_completion_data(self):
+        """capture_objective_completion() should log rich completion record."""
+        from archive_utils import capture_objective_completion, load_archive
+
+        state = {
+            "objective": "Implement feature X",
+            "plan": [
+                {"description": "Define scope", "status": "completed", "proof": "Scope doc"},
+                {"description": "Write tests", "status": "completed", "proof": "Tests pass"},
+                {"description": "Build feature", "status": "completed", "proof": "Feature works"},
+            ],
+        }
+
+        with patch('archive_utils.get_archive_file', return_value=self.archive_path):
+            result = capture_objective_completion(
+                state=state,
+                session_id="test-session",
+                outcome_quality="clean",
+                outcome_notes="All good"
+            )
+
+        self.assertEqual(result["type"], "objective_completion")
+        self.assertEqual(result["objective"], "Implement feature X")
+        self.assertEqual(len(result["approach_summary"]), 3)
+        self.assertEqual(result["metrics"]["steps_completed"], 3)
+        self.assertEqual(result["outcome"]["quality"], "clean")
+
+        # Verify it was logged
+        with patch('archive_utils.get_archive_file', return_value=self.archive_path):
+            entries = load_archive()
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["type"], "objective_completion")
+
+
+class TestCaptureObjectivePartial(unittest.TestCase):
+    """Tests for capture_objective_partial()."""
+
+    def setUp(self):
+        """Create temp directory for archive."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.archive_path = Path(self.temp_dir) / ".proof" / "archive.jsonl"
+        self.archive_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        """Clean up temp directory."""
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_captures_partial_data(self):
+        """capture_objective_partial() should log partial completion record."""
+        from archive_utils import capture_objective_partial, load_archive
+
+        state = {
+            "objective": "Old objective",
+            "plan": [
+                {"description": "Step 1", "status": "completed", "proof": "Done"},
+                {"description": "Step 2", "status": "in_progress"},
+                {"description": "Step 3", "status": "pending"},
+            ],
+        }
+
+        with patch('archive_utils.get_archive_file', return_value=self.archive_path):
+            result = capture_objective_partial(
+                state=state,
+                session_id="test-session",
+                reason="objective_changed",
+                new_objective="New objective"
+            )
+
+        self.assertEqual(result["type"], "objective_partial")
+        self.assertEqual(result["objective"], "Old objective")
+        self.assertEqual(result["new_objective"], "New objective")
+        self.assertEqual(result["metrics"]["steps_completed"], 1)
+        self.assertEqual(result["metrics"]["steps_abandoned"], 2)
+        self.assertEqual(result["reason"], "objective_changed")
+
+        # Verify completed steps captured
+        self.assertEqual(len(result["approach_summary"]), 1)
+
+
+class TestGetObjectiveCompletions(unittest.TestCase):
+    """Tests for get_objective_completions()."""
+
+    def setUp(self):
+        """Create temp directory for archive."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.archive_path = Path(self.temp_dir) / ".proof" / "archive.jsonl"
+        self.archive_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        """Clean up temp directory."""
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_filters_completions_only(self):
+        """get_objective_completions() should return only completion records."""
+        from archive_utils import get_objective_completions
+
+        # Write mixed archive entries
+        with open(self.archive_path, 'w') as f:
+            f.write(json.dumps({"type": "objective_completion", "objective": "A"}) + "\n")
+            f.write(json.dumps({"type": "completed_step", "step": "X"}) + "\n")
+            f.write(json.dumps({"type": "objective_completion", "objective": "B"}) + "\n")
+            f.write(json.dumps({"type": "objective_partial", "objective": "C"}) + "\n")
+
+        with patch('archive_utils.get_archive_file', return_value=self.archive_path):
+            completions = get_objective_completions(limit=50)
+
+        self.assertEqual(len(completions), 2)
+        self.assertTrue(all(c["type"] == "objective_completion" for c in completions))
+
+
+class TestGetObjectivePartials(unittest.TestCase):
+    """Tests for get_objective_partials()."""
+
+    def setUp(self):
+        """Create temp directory for archive."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.archive_path = Path(self.temp_dir) / ".proof" / "archive.jsonl"
+        self.archive_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        """Clean up temp directory."""
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_filters_partials_only(self):
+        """get_objective_partials() should return only partial records."""
+        from archive_utils import get_objective_partials
+
+        # Write mixed archive entries
+        with open(self.archive_path, 'w') as f:
+            f.write(json.dumps({"type": "objective_partial", "objective": "A"}) + "\n")
+            f.write(json.dumps({"type": "objective_completion", "objective": "B"}) + "\n")
+            f.write(json.dumps({"type": "objective_partial", "objective": "C"}) + "\n")
+
+        with patch('archive_utils.get_archive_file', return_value=self.archive_path):
+            partials = get_objective_partials(limit=50)
+
+        self.assertEqual(len(partials), 2)
+        self.assertTrue(all(p["type"] == "objective_partial" for p in partials))
 
 
 if __name__ == '__main__':

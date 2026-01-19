@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Operator's Edge Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Header */
+        .header {
+            background: #161b22;
+            border-bottom: 1px solid #30363d;
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .header h1 {
+            font-size: 18px;
+            font-weight: 600;
+            color: #f0f6fc;
+        }
+
+        .header-meta {
+            font-size: 12px;
+            color: #8b949e;
+        }
+
+        /* Tab Navigation */
+        .tab-nav {
+            background: #161b22;
+            display: flex;
+            gap: 4px;
+            padding: 0 20px;
+            border-bottom: 1px solid #30363d;
+        }
+
+        .tab-btn {
+            background: transparent;
+            border: none;
+            color: #8b949e;
+            padding: 12px 16px;
+            font-size: 14px;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s ease;
+        }
+
+        .tab-btn:hover {
+            color: #c9d1d9;
+        }
+
+        .tab-btn.active {
+            color: #f0f6fc;
+            border-bottom-color: #f78166;
+        }
+
+        .tab-btn .tab-icon {
+            margin-right: 6px;
+        }
+
+        /* Tab Content */
+        .tab-content {
+            flex: 1;
+            display: none;
+            overflow: hidden;
+        }
+
+        .tab-content.active {
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Iframe container */
+        .viz-frame {
+            flex: 1;
+            border: none;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Digest content styling */
+        .digest-content {
+            padding: 20px;
+            overflow-y: auto;
+            max-width: 900px;
+            margin: 0 auto;
+            width: 100%;
+        }
+
+        .digest-content h1,
+        .digest-content h2,
+        .digest-content h3 {
+            color: #f0f6fc;
+            margin-top: 24px;
+            margin-bottom: 12px;
+        }
+
+        .digest-content h1 { font-size: 24px; }
+        .digest-content h2 { font-size: 18px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
+        .digest-content h3 { font-size: 16px; }
+
+        .digest-content p {
+            line-height: 1.6;
+            margin-bottom: 12px;
+        }
+
+        .digest-content code {
+            background: #1f2428;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'SF Mono', Consolas, monospace;
+            font-size: 13px;
+        }
+
+        .digest-content table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 16px 0;
+        }
+
+        .digest-content th,
+        .digest-content td {
+            padding: 8px 12px;
+            border: 1px solid #30363d;
+            text-align: left;
+        }
+
+        .digest-content th {
+            background: #161b22;
+            font-weight: 600;
+        }
+
+        .digest-content a {
+            color: #58a6ff;
+            text-decoration: none;
+        }
+
+        .digest-content a:hover {
+            text-decoration: underline;
+        }
+
+        /* Loading state */
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #8b949e;
+        }
+
+        /* Status indicators */
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 6px;
+        }
+
+        .status-dot.active { background: #3fb950; }
+        .status-dot.warning { background: #d29922; }
+        .status-dot.error { background: #f85149; }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <h1>Operator's Edge</h1>
+        <span class="header-meta" id="header-meta">Loading...</span>
+    </header>
+
+    <nav class="tab-nav">
+        <button class="tab-btn active" data-tab="story">
+            <span class="tab-icon">&#9658;</span>Story
+        </button>
+        <button class="tab-btn" data-tab="explorer">
+            <span class="tab-icon">&#128269;</span>Explorer
+        </button>
+        <button class="tab-btn" data-tab="digest">
+            <span class="tab-icon">&#128202;</span>Digest
+        </button>
+    </nav>
+
+    <div id="story" class="tab-content active">
+        <iframe class="viz-frame" src="proof_viz.html#story" id="story-frame"></iframe>
+    </div>
+
+    <div id="explorer" class="tab-content">
+        <iframe class="viz-frame" src="proof_viz.html#explorer" id="explorer-frame"></iframe>
+    </div>
+
+    <div id="digest" class="tab-content">
+        <div class="digest-content" id="digest-content">
+            <div class="loading">Loading digest...</div>
+        </div>
+    </div>
+
+    <script>
+        // Tab switching
+        const tabBtns = document.querySelectorAll('.tab-btn');
+        const tabContents = document.querySelectorAll('.tab-content');
+
+        tabBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const tabId = btn.dataset.tab;
+
+                // Update active states
+                tabBtns.forEach(b => b.classList.remove('active'));
+                tabContents.forEach(c => c.classList.remove('active'));
+
+                btn.classList.add('active');
+                document.getElementById(tabId).classList.add('active');
+
+                // Update URL hash
+                window.location.hash = tabId;
+            });
+        });
+
+        // Load from URL hash
+        function loadFromHash() {
+            const hash = window.location.hash.slice(1) || 'story';
+            const btn = document.querySelector(`[data-tab="${hash}"]`);
+            if (btn) btn.click();
+        }
+
+        window.addEventListener('hashchange', loadFromHash);
+
+        // Load digest markdown
+        async function loadDigest() {
+            const container = document.getElementById('digest-content');
+            try {
+                // Try today's digest first, then fall back to most recent
+                const today = new Date().toISOString().split('T')[0];
+                let response = await fetch(`reports/edge_digest_${today}.md`);
+
+                if (!response.ok) {
+                    // Fallback: list reports directory not available in static hosting
+                    // Show message to user
+                    container.innerHTML = `
+                        <h1>Edge Digest</h1>
+                        <p>No digest found for ${today}.</p>
+                        <p>Run <code>./tools/edge_loop.sh</code> to generate one.</p>
+                    `;
+                    return;
+                }
+
+                const markdown = await response.text();
+                container.innerHTML = parseMarkdown(markdown);
+            } catch (e) {
+                container.innerHTML = `
+                    <h1>Edge Digest</h1>
+                    <p>Unable to load digest. Run <code>./tools/edge_loop.sh</code> to generate one.</p>
+                `;
+            }
+        }
+
+        // Simple markdown parser (handles our digest format)
+        function parseMarkdown(md) {
+            let html = md
+                // Headers
+                .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+                .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+                .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+                // Bold
+                .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                // Italic
+                .replace(/\*(.+?)\*/g, '<em>$1</em>')
+                // Code
+                .replace(/`([^`]+)`/g, '<code>$1</code>')
+                // Links
+                .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+                // Horizontal rule
+                .replace(/^---$/gm, '<hr>')
+                // Line breaks
+                .replace(/\n\n/g, '</p><p>')
+                // Tables (simple)
+                .replace(/^\|(.+)\|$/gm, (match, content) => {
+                    const cells = content.split('|').map(c => c.trim());
+                    const isHeader = cells.every(c => c.match(/^-+$/));
+                    if (isHeader) return '';
+                    const tag = content.includes('---') ? 'th' : 'td';
+                    return '<tr>' + cells.map(c => `<${tag}>${c}</${tag}>`).join('') + '</tr>';
+                });
+
+            // Wrap tables
+            html = html.replace(/(<tr>[\s\S]*?<\/tr>)+/g, '<table>$&</table>');
+
+            // Wrap in paragraph
+            html = '<p>' + html + '</p>';
+
+            // Clean up empty paragraphs
+            html = html.replace(/<p>\s*<\/p>/g, '');
+            html = html.replace(/<p>\s*<(h[123]|table|hr)/g, '<$1');
+            html = html.replace(/<\/(h[123]|table|hr)>\s*<\/p>/g, '</$1>');
+
+            return html;
+        }
+
+        // Update header meta with current date
+        function updateMeta() {
+            const date = new Date().toLocaleDateString('en-US', {
+                weekday: 'short',
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric'
+            });
+            document.getElementById('header-meta').textContent = date;
+        }
+
+        // Initialize
+        updateMeta();
+        loadDigest();
+        loadFromHash();
+    </script>
+</body>
+</html>

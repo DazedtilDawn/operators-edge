@@ -69,13 +69,17 @@ Everything else (executing plan steps, read operations) runs automatically.
 ## Files That Matter
 
 ```
-active_context.yaml          # Your plan and progress (YAML, validated)
+active_context.yaml          # Source of truth (plan, state, runtime)
+├── runtime.junction         # Junction gate state
+├── runtime.gear             # Gear state machine
+├── runtime.dispatch         # Dispatch mode (edge-yolo)
 .proof/session_log.jsonl     # Auto-captured proof of all actions
-.claude/state/gear_state.json      # Gear runtime state
-.claude/state/junction_state.json  # Junction gate state (source of truth)
-.claude/state/dispatch_state.json  # Dispatch mode state (edge-yolo)
-.claude/state/               # Hook state (hashes, failure logs)
+.proof/archive.jsonl         # Archived steps and history
+.claude/state/               # Hook state (hashes, session ID)
 ```
+
+**Note (v7.0)**: Runtime state lives in `active_context.yaml`'s `runtime:` section.
+The `.claude/state/*.json` files are deprecated fallbacks - do not modify directly.
 
 ## What's NOT Enforced (Policy Only)
 

@@ -3,6 +3,9 @@ description: Execute the current step from the plan
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---
 
+> **[v4.0 MIGRATION]** Consider using `/edge active` then `/edge` to execute steps.
+> The `/edge-step` command still works but `/edge` in ACTIVE mode provides the same functionality with mode awareness.
+
 # Execute Current Step
 
 @active_context.yaml

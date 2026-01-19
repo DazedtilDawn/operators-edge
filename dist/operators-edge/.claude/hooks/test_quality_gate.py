@@ -392,8 +392,8 @@ class TestRunQualityGate(unittest.TestCase):
         }
         result = run_quality_gate(state)
         self.assertFalse(result.passed)
-        # Should have 3 failed checks
-        self.assertEqual(len(result.failed_checks), 3)
+        # Should have at least 3 failed checks (eval gate may add warning)
+        self.assertGreaterEqual(len(result.failed_checks), 3)
 
 
 # =============================================================================
@@ -435,6 +435,146 @@ class TestDisplayHelpers(unittest.TestCase):
         self.assertIn("quality_gate", output)
         self.assertIn("steps_have_proof", output)
         self.assertIn("Options", output)
+
+
+# =============================================================================
+# TEST: check_verification_step_exists (Understanding-First v1.0)
+# =============================================================================
+
+class TestCheckVerificationStepExists(unittest.TestCase):
+    """Tests for check_verification_step_exists() - mandatory verification step check."""
+
+    def test_passes_when_no_intent_set(self):
+        """Should pass when intent is not set (backward compatibility)."""
+        from quality_gate import check_verification_step_exists
+
+        state = {
+            "plan": [
+                {"description": "Step 1", "status": "completed", "proof": "Done"},
+            ]
+        }
+        result = check_verification_step_exists(state)
+        self.assertTrue(result.passed)
+        self.assertIn("No intent set", result.message)
+
+    def test_fails_when_no_verification_step(self):
+        """Should fail when intent set but no verification step in plan."""
+        from quality_gate import check_verification_step_exists
+
+        state = {
+            "intent": {
+                "user_wants": "Add feature",
+                "success_looks_like": "Feature works",
+                "confirmed": True
+            },
+            "plan": [
+                {"description": "Step 1", "status": "completed", "proof": "Done"},
+                {"description": "Step 2", "status": "completed", "proof": "Done"},
+            ]
+        }
+        result = check_verification_step_exists(state)
+        self.assertFalse(result.passed)
+        self.assertEqual(result.severity, "error")
+        self.assertIn("No verification step", result.message)
+
+    def test_fails_when_verification_step_not_completed(self):
+        """Should fail when verification step exists but is pending."""
+        from quality_gate import check_verification_step_exists
+
+        state = {
+            "intent": {
+                "user_wants": "Add feature",
+                "confirmed": True
+            },
+            "plan": [
+                {"description": "Implement feature", "status": "completed", "proof": "Done"},
+                {"description": "Verify feature works", "status": "pending", "is_verification": True},
+            ]
+        }
+        result = check_verification_step_exists(state)
+        self.assertFalse(result.passed)
+        self.assertIn("not completed", result.message)
+        self.assertIn("pending", result.message)
+
+    def test_fails_when_verification_step_in_progress(self):
+        """Should fail when verification step is in_progress."""
+        from quality_gate import check_verification_step_exists
+
+        state = {
+            "intent": {"user_wants": "Add feature", "confirmed": True},
+            "plan": [
+                {"description": "Implement", "status": "completed", "proof": "Done"},
+                {"description": "Verify", "status": "in_progress", "is_verification": True},
+            ]
+        }
+        result = check_verification_step_exists(state)
+        self.assertFalse(result.passed)
+        self.assertIn("in_progress", result.message)
+
+    def test_passes_when_verification_step_completed(self):
+        """Should pass when verification step exists and is completed."""
+        from quality_gate import check_verification_step_exists
+
+        state = {
+            "intent": {
+                "user_wants": "Add feature",
+                "success_looks_like": "Feature works",
+                "confirmed": True
+            },
+            "plan": [
+                {"description": "Implement feature", "status": "completed", "proof": "Done"},
+                {"description": "Verify: run tests", "status": "completed", "proof": "Tests pass", "is_verification": True},
+            ]
+        }
+        result = check_verification_step_exists(state)
+        self.assertTrue(result.passed)
+        self.assertIn("completed", result.message)
+
+    def test_passes_with_multiple_verification_steps(self):
+        """Should pass when at least one verification step is completed."""
+        from quality_gate import check_verification_step_exists
+
+        state = {
+            "intent": {"user_wants": "Add feature", "confirmed": True},
+            "plan": [
+                {"description": "Implement", "status": "completed", "proof": "Done"},
+                {"description": "Verify A", "status": "completed", "proof": "Pass", "is_verification": True},
+                {"description": "Verify B", "status": "pending", "is_verification": True},
+            ]
+        }
+        result = check_verification_step_exists(state)
+        self.assertTrue(result.passed)
+        self.assertIn("1 of 2", result.message)
+
+    def test_fails_with_empty_plan(self):
+        """Should fail when intent set but plan is empty."""
+        from quality_gate import check_verification_step_exists
+
+        state = {
+            "intent": {"user_wants": "Add feature", "confirmed": True},
+            "plan": []
+        }
+        result = check_verification_step_exists(state)
+        self.assertFalse(result.passed)
+        self.assertIn("No plan steps", result.message)
+
+    def test_includes_success_criteria_in_details(self):
+        """Should include success_looks_like in error details."""
+        from quality_gate import check_verification_step_exists
+
+        state = {
+            "intent": {
+                "user_wants": "Add feature",
+                "success_looks_like": "All tests pass and no errors in logs",
+                "confirmed": True
+            },
+            "plan": [
+                {"description": "Step 1", "status": "completed", "proof": "Done"},
+            ]
+        }
+        result = check_verification_step_exists(state)
+        self.assertFalse(result.passed)
+        self.assertIn("All tests pass", result.details[1])
 
 
 if __name__ == '__main__':
