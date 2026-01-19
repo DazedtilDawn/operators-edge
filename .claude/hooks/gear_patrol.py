@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
-Operator's Edge - Patrol Gear (v3.7)
+Operator's Edge - Patrol Gear (v3.7, v7.1 graduation)
 Scans for issues after objective completion - the "vigilance" mode.
 
 Patrol Gear is engaged after an objective completes. It:
 - Runs a quick scout scan for new issues
 - Checks lesson violations (v3.6 integration)
 - Surfaces findings that could become new objectives
+- v7.1: Checks graduation candidates and shadow rule promotion
 """
 
 from typing import Dict, Any, Optional, List, Tuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -32,6 +33,10 @@ class PatrolGearResult:
     recommended_action: Optional[str]  # e.g., "Select finding [1]"
     error: Optional[str]
 
+    # v7.1: Graduation scanning
+    graduation_candidates: List[Dict[str, Any]] = field(default_factory=list)
+    shadow_rule_actions: List[Dict[str, Any]] = field(default_factory=list)
+
     def to_dict(self) -> dict:
         return {
             "scan_completed": self.scan_completed,
@@ -41,6 +46,8 @@ class PatrolGearResult:
             "scan_duration_seconds": self.scan_duration_seconds,
             "recommended_action": self.recommended_action,
             "error": self.error,
+            "graduation_candidates": self.graduation_candidates,
+            "shadow_rule_actions": self.shadow_rule_actions,
         }
 
 
@@ -111,6 +118,33 @@ def run_patrol_scan(
                 error=f"Scan exceeded timeout ({PATROL_LIMITS['scan_timeout_seconds']}s)",
             )
 
+        # v7.1: Check for graduation candidates and shadow rule promotions
+        graduation_candidates = []
+        shadow_rule_actions = []
+
+        try:
+            from rules_engine import (
+                get_graduation_candidates,
+                check_shadow_rules_for_promotion,
+            )
+
+            # Find lessons ready for graduation
+            candidates = get_graduation_candidates(state, project_dir)
+            graduation_candidates = [
+                {
+                    "trigger": c.get("trigger", ""),
+                    "lesson": c.get("lesson", "")[:80],
+                    "reinforced": c.get("reinforced", 0),
+                }
+                for c in candidates[:3]  # Limit to top 3
+            ]
+
+            # Check shadow rules for promotion/demotion
+            shadow_rule_actions = check_shadow_rules_for_promotion(project_dir)
+
+        except (ImportError, Exception):
+            pass  # Graduation scanning optional
+
         return PatrolGearResult(
             scan_completed=True,
             findings_count=len(surfaced),
@@ -119,6 +153,8 @@ def run_patrol_scan(
             scan_duration_seconds=round(duration, 2),
             recommended_action=recommendation,
             error=None,
+            graduation_candidates=graduation_candidates,
+            shadow_rule_actions=shadow_rule_actions,
         )
 
     except Exception as e:
@@ -131,6 +167,8 @@ def run_patrol_scan(
             scan_duration_seconds=round(duration, 2),
             recommended_action=None,
             error=str(e),
+            graduation_candidates=[],
+            shadow_rule_actions=[],
         )
 
 
@@ -270,6 +308,23 @@ def format_patrol_status(result: PatrolGearResult) -> str:
         for i, f in enumerate(result.findings[:3]):
             priority_marker = "!" if f["priority"] == "high" else "~" if f["priority"] == "medium" else "."
             lines.append(f"   [{i+1}] {priority_marker} {f['title'][:45]}...")
+
+    # v7.1: Graduation candidates
+    if result.graduation_candidates:
+        lines.append("")
+        lines.append("   🎓 Graduation candidates:")
+        for c in result.graduation_candidates[:3]:
+            lines.append(f"      - [{c['trigger']}] (reinforced {c['reinforced']}x)")
+        lines.append("   Run /edge-graduate to review")
+
+    # v7.1: Shadow rule actions
+    if result.shadow_rule_actions:
+        lines.append("")
+        lines.append("   🌙 Shadow rule updates:")
+        for action in result.shadow_rule_actions[:3]:
+            icon = "✅" if action["action"] == "promote" else "⚠️"
+            lines.append(f"      {icon} {action['rule_id']}: {action['action']}")
+            lines.append(f"         {action['reason']}")
 
     if result.recommended_action:
         lines.append("")
