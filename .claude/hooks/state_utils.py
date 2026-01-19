@@ -1178,3 +1178,354 @@ def get_schema_version(state):
 def generate_mismatch_id():
     """Generate a unique mismatch ID."""
     return f"mismatch-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+
+# =============================================================================
+# INTENT VERIFICATION (Understanding-First v1.0)
+# =============================================================================
+
+def get_intent(state: dict = None) -> dict:
+    """
+    Get the intent section from state.
+
+    Args:
+        state: The active_context state dict. If None, loads from file.
+
+    Returns:
+        Intent dict with keys: user_wants, success_looks_like, confirmed, confirmed_at
+        Returns empty dict if intent section doesn't exist.
+    """
+    if state is None:
+        state = load_yaml_state() or {}
+
+    return state.get("intent", {})
+
+
+def is_intent_confirmed(state: dict = None) -> bool:
+    """
+    Check if intent is confirmed.
+
+    Args:
+        state: The active_context state dict. If None, loads from file.
+
+    Returns:
+        True if intent.confirmed is true, False otherwise.
+    """
+    intent = get_intent(state)
+    return intent.get("confirmed", False) is True
+
+
+def set_intent_confirmed(confirmed: bool = True, state: dict = None) -> bool:
+    """
+    Set the intent.confirmed flag in state file.
+
+    Args:
+        confirmed: Whether to mark intent as confirmed
+        state: State dict (used to check if intent section exists)
+
+    Returns:
+        True on success, False on failure
+    """
+    if state is None:
+        state = load_yaml_state() or {}
+
+    # Check if intent section exists
+    intent = state.get("intent", {})
+    if not intent.get("user_wants"):
+        return False  # Can't confirm without user_wants
+
+    yaml_file = get_project_dir() / "active_context.yaml"
+    if not yaml_file.exists():
+        return False
+
+    try:
+        content = yaml_file.read_text()
+        lines = content.split('\n')
+        new_lines = []
+        in_intent_section = False
+        confirmed_line_found = False
+
+        for line in lines:
+            stripped = line.strip()
+            indent_level = len(line) - len(line.lstrip())
+
+            # Track when we enter/exit intent section
+            if stripped == "intent:" or stripped.startswith("intent: "):
+                in_intent_section = True
+                new_lines.append(line)
+                continue
+            elif in_intent_section and indent_level == 0 and stripped and not stripped.startswith("#"):
+                # Back to root level (no indentation) = exit intent section
+                in_intent_section = False
+
+            # Update confirmed field within intent section
+            if in_intent_section and stripped.startswith("confirmed:") and not stripped.startswith("confirmed_at"):
+                new_lines.append(f"{' ' * indent_level}confirmed: {'true' if confirmed else 'false'}")
+                confirmed_line_found = True
+                continue
+            elif in_intent_section and stripped.startswith("confirmed_at:"):
+                if confirmed:
+                    new_lines.append(f"{' ' * indent_level}confirmed_at: \"{datetime.now().isoformat()}\"")
+                    continue
+
+            new_lines.append(line)
+
+        if not confirmed_line_found:
+            return False  # No confirmed field to update
+
+        write_text_atomic(yaml_file, '\n'.join(new_lines))
+        return True
+    except Exception:
+        return False
+
+
+def get_intent_summary(state: dict = None) -> str:
+    """
+    Get a one-line summary of current intent state.
+
+    Returns:
+        String like "Intent: confirmed" or "Intent: NOT confirmed (user_wants set)"
+    """
+    intent = get_intent(state)
+    if not intent:
+        return "Intent: not set"
+
+    user_wants = intent.get("user_wants", "")
+    confirmed = intent.get("confirmed", False)
+
+    if confirmed:
+        return "Intent: confirmed"
+    elif user_wants:
+        return f"Intent: NOT confirmed (user_wants: {user_wants[:40]}...)"
+    else:
+        return "Intent: not set"
+
+
+def get_success_criteria(state: dict = None) -> list:
+    """
+    Get structured success criteria from intent (v1.1).
+
+    Success criteria are optional testable assertions that complement
+    the free-text success_looks_like field.
+
+    Example schema:
+        success_criteria:
+          - type: file_exists
+            path: src/components/DarkModeToggle.tsx
+          - type: test_passes
+            command: npm test -- DarkModeToggle
+          - type: manual
+            description: "Toggle visible in settings"
+
+    Args:
+        state: The active_context state dict. If None, loads from file.
+
+    Returns:
+        List of criterion dicts, or empty list if not defined
+    """
+    intent = get_intent(state)
+    return intent.get("success_criteria", [])
+
+
+def has_structured_criteria(state: dict = None) -> bool:
+    """
+    Check if intent has structured success criteria (v1.1).
+
+    Returns:
+        True if success_criteria array exists and is non-empty
+    """
+    criteria = get_success_criteria(state)
+    return bool(criteria)
+
+
+# =============================================================================
+# OBJECTIVE MANAGEMENT (v6.0)
+# =============================================================================
+
+def set_new_objective(objective_text: str, clear_plan: bool = True) -> tuple[bool, str]:
+    """
+    Set a new objective in active_context.yaml.
+
+    This is the core function for `/edge "objective"` flow.
+    It updates the objective, resets intent for confirmation, and optionally
+    clears the existing plan.
+
+    Args:
+        objective_text: The new objective text
+        clear_plan: If True, clear existing plan. If False, keep it.
+
+    Returns:
+        Tuple of (success: bool, message: str)
+    """
+    yaml_file = get_project_dir() / "active_context.yaml"
+
+    if not yaml_file.exists():
+        return (False, "active_context.yaml not found")
+
+    try:
+        lines = yaml_file.read_text().split('\n')
+        new_lines = []
+
+        # Track what we've updated
+        updated_objective = False
+        updated_intent = False
+        in_intent_section = False
+        in_plan_section = False
+        intent_indent = 0
+        plan_indent = 0
+        skip_until_unindent = False
+        skip_indent_level = 0
+
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            stripped = line.lstrip()
+            current_indent = len(line) - len(stripped)
+
+            # Handle skipping sections (for plan clearing)
+            if skip_until_unindent:
+                if stripped and current_indent <= skip_indent_level:
+                    skip_until_unindent = False
+                else:
+                    i += 1
+                    continue
+
+            # Update objective line
+            if stripped.startswith("objective:"):
+                new_lines.append(f'objective: "{objective_text}"')
+                updated_objective = True
+                i += 1
+                continue
+
+            # Track intent section for updating
+            if stripped.startswith("intent:"):
+                in_intent_section = True
+                intent_indent = current_indent
+                new_lines.append(line)
+                i += 1
+                continue
+
+            # Update intent fields
+            if in_intent_section and current_indent > intent_indent:
+                if stripped.startswith("user_wants:"):
+                    new_lines.append(f'{" " * current_indent}user_wants: "{objective_text}"')
+                    updated_intent = True
+                    i += 1
+                    continue
+                elif stripped.startswith("success_looks_like:"):
+                    new_lines.append(f'{" " * current_indent}success_looks_like: "To be determined during planning"')
+                    i += 1
+                    continue
+                elif stripped.startswith("confirmed:"):
+                    new_lines.append(f'{" " * current_indent}confirmed: false')
+                    i += 1
+                    continue
+                elif stripped.startswith("confirmed_at:"):
+                    new_lines.append(f'{" " * current_indent}confirmed_at: null')
+                    i += 1
+                    continue
+            elif in_intent_section and stripped and current_indent <= intent_indent:
+                in_intent_section = False
+
+            # Handle plan section (clear if requested)
+            if clear_plan and stripped.startswith("plan:"):
+                in_plan_section = True
+                plan_indent = current_indent
+                new_lines.append(f'{" " * current_indent}plan: []')
+                # Skip all plan content
+                skip_until_unindent = True
+                skip_indent_level = plan_indent
+                i += 1
+                continue
+
+            # Reset current_step if clearing plan
+            if clear_plan and stripped.startswith("current_step:"):
+                new_lines.append(f'{" " * current_indent}current_step: 0')
+                i += 1
+                continue
+
+            # Update mode to 'plan' for new objectives
+            if stripped.startswith("mode:"):
+                new_lines.append(f'{" " * current_indent}mode: "plan"')
+                i += 1
+                continue
+
+            new_lines.append(line)
+            i += 1
+
+        if not updated_objective:
+            return (False, "Could not find objective field in YAML")
+
+        write_text_atomic(yaml_file, '\n'.join(new_lines))
+        return (True, f"Objective set: {objective_text[:60]}...")
+
+    except Exception as e:
+        return (False, f"Error updating objective: {e}")
+
+
+def is_objective_text(text: str) -> bool:
+    """
+    Determine if text looks like an objective (vs a command).
+
+    An objective is freeform text that describes what to achieve.
+    Commands are specific keywords like 'status', 'approve', etc.
+
+    Args:
+        text: The text to check
+
+    Returns:
+        True if this looks like an objective
+    """
+    if not text or not text.strip():
+        return False
+
+    text = text.strip()
+
+    # Known commands - these are NOT objectives
+    commands = {
+        'status', 'on', 'off', 'stop', 'approve', 'skip', 'dismiss',
+        'plan', 'active', 'review', 'done',  # Mode commands
+        '--plan', '--verify', '--auto',  # Flag commands
+    }
+
+    # Check if it's a known command
+    first_word = text.split()[0].lower()
+    if first_word in commands:
+        return False
+
+    # If it starts with --, it's a flag
+    if text.startswith('--'):
+        return False
+
+    # If it's quoted, it's definitely an objective
+    if (text.startswith('"') and text.endswith('"')) or \
+       (text.startswith("'") and text.endswith("'")):
+        return True
+
+    # If it's multiple words, likely an objective
+    if len(text.split()) > 2:
+        return True
+
+    # Single/double word that's not a command - treat as objective
+    # (e.g., "Refactoring" or "Add authentication")
+    return True
+
+
+def extract_objective_text(text: str) -> str:
+    """
+    Extract the objective text, removing quotes if present.
+
+    Args:
+        text: Raw text that may be quoted
+
+    Returns:
+        Clean objective text
+    """
+    text = text.strip()
+
+    # Remove surrounding quotes
+    if (text.startswith('"') and text.endswith('"')) or \
+       (text.startswith("'") and text.endswith("'")):
+        text = text[1:-1]
+
+    return text.strip()

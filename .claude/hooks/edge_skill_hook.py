@@ -25,11 +25,15 @@ from gear_engine import (
 from gear_config import (
     Gear,
     GearTransition,
+    QualityGateOverride,
     detect_current_gear,
     format_gear_status,
     GEAR_EMOJI,
 )
-from state_utils import load_yaml_state, Mode, detect_mode, set_mode, suggest_mode_transition
+from state_utils import (
+    load_yaml_state, Mode, detect_mode, set_mode, suggest_mode_transition,
+    set_new_objective, is_objective_text, extract_objective_text,
+)
 from junction_utils import (
     get_pending_junction,
     set_pending_junction,
@@ -46,6 +50,10 @@ from dispatch_utils import (
     increment_stuck_counter,
 )
 from dispatch_config import DispatchState, DISPATCH_DEFAULTS
+from eval_utils import cleanup_orphaned_eval_state, cleanup_old_snapshots
+from obligation_utils import clear_stale_obligations
+from proof_utils import get_current_session_id
+from datetime import datetime
 
 
 def parse_edge_args(user_input: str) -> dict:
@@ -158,13 +166,62 @@ def handle_stop() -> str:
     return "\n".join(lines)
 
 
-def handle_approve() -> tuple[str, bool]:
-    """Handle /edge approve - clear junction and continue."""
-    # Check if this is a mode_transition junction
+def _parse_check_specifier(specifier: str, failed_checks: list) -> list:
+    """
+    Parse user's check specifier into list of check names (v5.2).
+
+    Supports:
+    - Numeric indices (1-based): "1", "2", "1,2"
+    - Check names: "steps_have_proof", "no_dangling_in_progress"
+    - Mixed: "1,no_dangling_in_progress"
+
+    Args:
+        specifier: User input (e.g., "1,2" or "steps_have_proof")
+        failed_checks: List of failed check dicts with "name" field
+
+    Returns:
+        List of check names to approve
+    """
+    if not specifier:
+        return []
+
+    parts = [p.strip() for p in specifier.split(",")]
+    check_names = []
+
+    for part in parts:
+        if part.isdigit():
+            # Numeric index (1-based)
+            idx = int(part) - 1
+            if 0 <= idx < len(failed_checks):
+                name = failed_checks[idx].get("name", "")
+                if name:
+                    check_names.append(name)
+        else:
+            # Check name directly
+            check_names.append(part)
+
+    return [n for n in check_names if n]
+
+
+def handle_approve(args: str = "") -> tuple[str, bool]:
+    """
+    Handle /edge approve [check_specifier] - clear junction and continue.
+
+    Args:
+        args: Optional check specifier for quality gate (v5.2)
+              - Empty: Full override (bypass all checks)
+              - "1" or "1,2": Approve specific checks by number
+              - "check_name": Approve specific check by name
+    """
+    # Check junction type before clearing
     pending_junction = get_pending_junction()
     is_mode_transition = (
         pending_junction and
         pending_junction.get("type") == "mode_transition"
+    )
+    is_quality_gate = (
+        pending_junction and
+        pending_junction.get("type") == "quality_gate"
     )
 
     try:
@@ -175,6 +232,52 @@ def handle_approve() -> tuple[str, bool]:
         return (f"[WARNING] {warning}", False)
 
     if pending:
+        # If quality_gate, persist session-scoped override (v5.2)
+        if is_quality_gate:
+            try:
+                state = load_yaml_state()
+                gear_state = load_gear_state()
+                objective = state.get("objective", "") if state else ""
+
+                # Get failed checks from junction payload
+                payload = pending_junction.get("payload", {})
+                failed_checks = payload.get("failed_checks", [])
+
+                # Parse check specifier (v5.2)
+                check_specifier = args.strip() if args else ""
+
+                if check_specifier:
+                    # Check-specific override
+                    approved_checks = _parse_check_specifier(check_specifier, failed_checks)
+                    if not approved_checks:
+                        return (f"[ERROR] Invalid check specifier: '{check_specifier}'. Use numbers (1,2) or check names.", False)
+                    mode = "check_specific"
+                    message = f"Approved {len(approved_checks)} check(s): {', '.join(approved_checks)}"
+                else:
+                    # Full override (v5.1 behavior)
+                    approved_checks = []
+                    mode = "full"
+                    message = "All quality gate checks approved"
+
+                # Set session-scoped quality gate override
+                gear_state.quality_gate_override = QualityGateOverride(
+                    mode=mode,
+                    approved_at=datetime.now().isoformat(),
+                    session_id=get_current_session_id(),
+                    objective_hash=hash(objective),
+                    approved_checks=approved_checks,
+                    reason=payload.get("reason", "user_approved"),
+                )
+                save_gear_state(gear_state)
+
+                if mode == "full":
+                    return (f"[OVERRIDE SET] {message}. Gate will be bypassed on subsequent runs.", True)
+                else:
+                    return (f"[OVERRIDE SET] {message}. Only these checks will be bypassed.", True)
+            except Exception as e:
+                # Override failed, but junction is cleared - continue anyway
+                return (f"[APPROVED] Quality gate cleared (override failed: {e}). Continuing...", True)
+
         # If it was a mode_transition, perform the mode switch
         if is_mode_transition:
             payload = pending_junction.get("payload", {})
@@ -740,7 +843,16 @@ def handle_active_mode(state: dict) -> str:
 
 
 def handle_run(args: str = "") -> str:
-    """Handle /edge (run) - dispatch to mode-specific handler."""
+    """Handle /edge (run) - dispatch to mode-specific handler.
+
+    If args contains an objective (e.g., /edge "Deploy auth system"),
+    set that as the new objective and enter planning mode.
+    """
+    # Check if args looks like a new objective
+    if args and is_objective_text(args):
+        objective_text = extract_objective_text(args)
+        return handle_new_objective(objective_text)
+
     # Check for pending junction first (applies to all modes)
     pending = get_pending_junction()
     if pending:
@@ -762,8 +874,155 @@ def handle_run(args: str = "") -> str:
         return handle_active_mode(state)
 
 
+def handle_new_objective(objective_text: str) -> str:
+    """Handle /edge "objective" - set new objective and enter planning.
+
+    This is the "just works" flow:
+    1. Set the objective in active_context.yaml
+    2. Clear the existing plan
+    3. Set mode to PLAN
+    4. Show planning guidance
+
+    The user then explores, creates a plan, and runs /edge again
+    to start execution.
+    """
+    lines = [
+        "=" * 70,
+        "OPERATOR'S EDGE v6.0 - NEW OBJECTIVE",
+        "=" * 70,
+        "",
+    ]
+
+    # Check if there's an existing objective
+    state = load_yaml_state() or {}
+    existing_objective = state.get("objective", "")
+    existing_plan = state.get("plan", [])
+
+    if existing_objective and existing_plan:
+        incomplete = sum(1 for s in existing_plan
+                        if isinstance(s, dict) and s.get("status") in ("pending", "in_progress"))
+        if incomplete > 0:
+            lines.extend([
+                "⚠️  EXISTING WORK IN PROGRESS",
+                f"   Current objective: {existing_objective[:50]}...",
+                f"   Incomplete steps: {incomplete}",
+                "",
+                "   Setting new objective will CLEAR the existing plan.",
+                "",
+            ])
+
+    # Set the new objective
+    success, message = set_new_objective(objective_text, clear_plan=True)
+
+    if not success:
+        lines.extend([
+            f"❌ Failed to set objective: {message}",
+            "",
+            "Please check active_context.yaml and try again.",
+        ])
+        return "\n".join(lines)
+
+    lines.extend([
+        f"✓ Objective: {objective_text}",
+        "",
+    ])
+
+    # v7.1: Get pattern suggestion from learned guidance
+    suggestion_text = None
+    try:
+        from pattern_recognition import suggest_approach_for_objective
+        suggestion_text, pattern_match = suggest_approach_for_objective(objective_text)
+
+        if suggestion_text and pattern_match:
+            lines.extend([
+                "-" * 70,
+                "🎯 LEARNED GUIDANCE - Suggested Approach",
+                "-" * 70,
+                "",
+                suggestion_text,
+                "",
+            ])
+
+            # Track that we showed a suggestion (for Phase 4 learning)
+            try:
+                from archive_utils import log_to_archive
+                log_to_archive("suggestion_shown", {
+                    "objective": objective_text[:200],
+                    "pattern_id": pattern_match.pattern_id,
+                    "pattern_source": pattern_match.source,
+                    "confidence": pattern_match.confidence,
+                    "approach_verbs": [s.get("verb", "") for s in pattern_match.approach]
+                })
+            except Exception:
+                pass  # Logging failure shouldn't block the flow
+    except ImportError:
+        pass  # pattern_recognition not available
+    except Exception:
+        pass  # Suggestion failure shouldn't block objective setting
+
+    lines.extend([
+        "-" * 70,
+        "📋 PLAN MODE - Ready to plan",
+        "-" * 70,
+        "",
+    ])
+
+    if suggestion_text:
+        lines.extend([
+            "The objective is set and a suggested approach is shown above.",
+            "You can:",
+            "",
+            "  • FOLLOW the suggestion - Create plan steps matching the approach",
+            "  • MODIFY it - Use parts that make sense, skip others",
+            "  • IGNORE it - Create your own plan from scratch",
+            "",
+        ])
+    else:
+        lines.extend([
+            "The objective is set. Now:",
+            "",
+            "  1. EXPLORE - Understand the codebase and problem",
+            "     • Read relevant files",
+            "     • Search for patterns",
+            "     • Identify key components",
+            "",
+            "  2. PLAN - Create steps in active_context.yaml",
+            "     • Add plan steps with descriptions",
+            "     • Include a verification step",
+            "     • Set success criteria",
+            "",
+        ])
+
+    lines.extend([
+        "  CONFIRM - Run /edge to review and approve",
+        "",
+        "-" * 70,
+        "Commands:",
+        "  /edge           - Check status and continue",
+        "  /edge approve   - Approve plan and start execution",
+        "  /edge-yolo on   - Enable autopilot (executes until done)",
+        "-" * 70,
+        "",
+        "💡 TIP: For simple tasks, just describe what you want to do and",
+        "   I'll create a plan. For complex tasks, explore first.",
+        "",
+        "=" * 70,
+    ])
+
+    return "\n".join(lines)
+
+
 def main():
     """Main entry point - processes /edge command from user input."""
+    # Session-start cleanup (idempotent - safe to run every invocation)
+    # Clears orphaned state from previous crashed sessions
+    try:
+        cleanup_orphaned_eval_state(max_age_minutes=60)
+        cleanup_old_snapshots(retention_days=7, dry_run=False)
+        clear_stale_obligations(max_age_hours=24)
+    except Exception:
+        pass  # Cleanup failure shouldn't block /edge execution
+
     # Get user input from stdin (Claude Code passes it via hook)
     user_input = ""
     if not sys.stdin.isatty():
@@ -789,7 +1048,7 @@ def main():
     elif command in ("off", "stop"):
         print(handle_stop())
     elif command == "approve":
-        message, should_run = handle_approve()
+        message, should_run = handle_approve(args)
         print(message)
         if should_run:
             # Also run a gear cycle after approving

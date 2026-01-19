@@ -183,6 +183,417 @@ def archive_completed_research(research_item):
 
 
 # =============================================================================
+# LEARNED GUIDANCE - Objective Completion Capture (v7.1)
+# =============================================================================
+
+def _get_default_taxonomy() -> dict:
+    """
+    Default verb taxonomy when guidance_config.yaml is unavailable.
+
+    This ensures the system works even without PyYAML installed.
+    """
+    return {
+        "scope": {
+            "description": "Define boundaries, identify what to work on",
+            "synonyms": ["define", "identify", "bound", "scope", "map", "analyze", "understand", "explore", "discover", "find"]
+        },
+        "plan": {
+            "description": "Design the approach, create structure",
+            "synonyms": ["plan", "design", "architect", "structure", "outline", "draft", "sketch", "propose"]
+        },
+        "test": {
+            "description": "Verify behavior, validate assumptions",
+            "synonyms": ["test", "verify", "validate", "check", "assert", "confirm", "ensure", "prove"]
+        },
+        "build": {
+            "description": "Create new functionality",
+            "synonyms": ["build", "create", "implement", "add", "write", "develop", "construct", "make"]
+        },
+        "extract": {
+            "description": "Pull out, separate, modularize",
+            "synonyms": ["extract", "pull", "separate", "modularize", "isolate", "split", "factor"]
+        },
+        "integrate": {
+            "description": "Combine, wire together, connect",
+            "synonyms": ["integrate", "wire", "connect", "combine", "merge", "link", "join", "hook"]
+        },
+        "fix": {
+            "description": "Repair broken behavior",
+            "synonyms": ["fix", "repair", "resolve", "correct", "patch", "debug", "address"]
+        },
+        "clean": {
+            "description": "Remove cruft, simplify",
+            "synonyms": ["clean", "remove", "delete", "simplify", "prune", "trim", "eliminate"]
+        },
+        "document": {
+            "description": "Write docs, comments, explanations",
+            "synonyms": ["document", "comment", "explain", "describe", "annotate", "note"]
+        },
+        "deploy": {
+            "description": "Ship, release, publish",
+            "synonyms": ["deploy", "ship", "release", "publish", "push", "launch", "roll out"]
+        }
+    }
+
+
+def _load_verb_taxonomy() -> dict:
+    """
+    Load the verb taxonomy from guidance_config.yaml.
+
+    Falls back to built-in defaults if:
+    - YAML file doesn't exist
+    - PyYAML isn't installed
+    - Any other error loading config
+    """
+    from pathlib import Path
+
+    config_file = Path(__file__).parent / "guidance_config.yaml"
+    if not config_file.exists():
+        return _get_default_taxonomy()
+
+    try:
+        import yaml
+        with open(config_file) as f:
+            config = yaml.safe_load(f)
+        return config.get("verb_taxonomy", _get_default_taxonomy())
+    except ImportError:
+        # PyYAML not installed - use defaults
+        return _get_default_taxonomy()
+    except Exception:
+        # Any other error - use defaults
+        return _get_default_taxonomy()
+
+
+def _normalize_step_to_verb(step_description: str, taxonomy: dict) -> str:
+    """
+    Normalize a step description to a canonical verb.
+
+    Searches for synonym matches in the taxonomy and returns
+    the canonical verb. Falls back to 'other' if no match.
+    """
+    if not step_description or not taxonomy:
+        return "other"
+
+    description_lower = step_description.lower()
+
+    # Check each canonical verb's synonyms
+    for verb, verb_data in taxonomy.items():
+        synonyms = verb_data.get("synonyms", [])
+        for synonym in synonyms:
+            if synonym in description_lower:
+                return verb
+
+    return "other"
+
+
+def _extract_approach_summary(plan: list, taxonomy: dict) -> list:
+    """
+    Extract normalized approach from completed plan steps.
+
+    Returns list of dicts with verb and original description.
+    """
+    approach = []
+    for step in plan:
+        if not isinstance(step, dict):
+            continue
+        if step.get("status") != "completed":
+            continue
+
+        description = step.get("description", "")
+        verb = _normalize_step_to_verb(description, taxonomy)
+
+        approach.append({
+            "verb": verb,
+            "description": description[:100],  # Truncate for storage
+            "proof": (step.get("proof") or "")[:200]  # Truncate proof
+        })
+
+    return approach
+
+
+def _compute_objective_metrics(state: dict) -> dict:
+    """
+    Compute metrics from objective completion.
+
+    Returns dict with step counts, mismatch stats, lesson stats.
+    """
+    plan = state.get("plan", [])
+    mismatches = state.get("mismatches", [])
+    memory = state.get("memory", [])
+
+    # Count steps by status
+    steps_planned = len(plan)
+    steps_completed = sum(1 for s in plan if isinstance(s, dict) and s.get("status") == "completed")
+    steps_abandoned = sum(1 for s in plan if isinstance(s, dict) and s.get("status") in ("pending", "blocked", "in_progress"))
+
+    # Count mismatches
+    mismatches_encountered = len(mismatches)
+    mismatches_resolved = sum(1 for m in mismatches if isinstance(m, dict) and m.get("resolved"))
+
+    # Count lessons (approximation - we don't track which were added this session)
+    lessons_count = len(memory) if isinstance(memory, list) else 0
+
+    return {
+        "steps_planned": steps_planned,
+        "steps_completed": steps_completed,
+        "steps_abandoned": steps_abandoned,
+        "mismatches_encountered": mismatches_encountered,
+        "mismatches_resolved": mismatches_resolved,
+        "lessons_in_memory": lessons_count
+    }
+
+
+def _infer_tags_from_objective(objective: str) -> list:
+    """
+    Infer tags from objective text for pattern matching.
+
+    Returns list of lowercase tags.
+    """
+    if not objective:
+        return []
+
+    objective_lower = objective.lower()
+    tags = []
+
+    # Common objective type indicators
+    tag_keywords = {
+        "refactoring": ["refactor", "reorganize", "restructure", "modular"],
+        "feature": ["add", "implement", "create", "build", "new"],
+        "bugfix": ["fix", "bug", "broken", "error", "issue"],
+        "migration": ["migrate", "upgrade", "move", "transition"],
+        "documentation": ["document", "docs", "readme", "guide"],
+        "testing": ["test", "coverage", "spec", "validation"],
+        "performance": ["optimize", "performance", "speed", "fast"],
+        "security": ["security", "auth", "permission", "access"],
+        "cleanup": ["clean", "remove", "delete", "prune", "deprecate"],
+        "integration": ["integrate", "connect", "api", "external"]
+    }
+
+    for tag, keywords in tag_keywords.items():
+        if any(kw in objective_lower for kw in keywords):
+            tags.append(tag)
+
+    return tags
+
+
+def capture_objective_completion(
+    state: dict,
+    session_id: str,
+    outcome_quality: str = "clean",
+    outcome_notes: str = ""
+) -> dict:
+    """
+    Capture comprehensive objective completion data for learned guidance.
+
+    This is the core Phase 1 function that creates rich data for pattern
+    recognition. Called when an objective is marked complete.
+
+    Args:
+        state: The active_context state dict
+        session_id: Current session ID
+        outcome_quality: "clean" | "messy" | "partial"
+        outcome_notes: Free-text notes on the outcome
+
+    Returns:
+        The archive entry that was created
+    """
+    taxonomy = _load_verb_taxonomy()
+
+    objective = state.get("objective", "Unknown")
+    plan = state.get("plan", [])
+
+    # Extract normalized approach
+    approach_summary = _extract_approach_summary(plan, taxonomy)
+
+    # Just the verbs for pattern matching
+    approach_verbs = [step["verb"] for step in approach_summary]
+
+    # Compute metrics
+    metrics = _compute_objective_metrics(state)
+
+    # Infer tags
+    tags = _infer_tags_from_objective(objective)
+
+    # Get self-score if available
+    self_score = state.get("self_score")
+    score_level = None
+    score_total = None
+    if self_score and isinstance(self_score, dict):
+        score_level = self_score.get("level")
+        score_total = self_score.get("total")
+
+    # Phase 4: Process feedback loop - check if suggestion was followed
+    guidance_data = {
+        "pattern_suggested": None,
+        "suggestion_confidence": None,
+        "suggestion_followed": None,
+        "follow_score": None,
+        "confidence_updated": None
+    }
+
+    try:
+        from feedback_loop import process_completion_feedback
+        feedback = process_completion_feedback(
+            objective=objective,
+            approach_verbs=approach_verbs,
+            success=True,  # This function is for completions
+            session_id=session_id
+        )
+        if feedback.suggestion_found:
+            guidance_data = {
+                "pattern_suggested": feedback.pattern_id,
+                "pattern_source": feedback.pattern_source,
+                "suggestion_confidence": feedback.new_confidence,
+                "suggestion_followed": feedback.suggestion_followed,
+                "follow_score": round(feedback.follow_score, 3) if feedback.follow_score else None,
+                "confidence_updated": round(feedback.confidence_delta, 3) if feedback.confidence_delta else None
+            }
+    except ImportError:
+        pass  # feedback_loop not available
+    except Exception:
+        pass  # Non-critical feedback processing failure
+
+    # Build the entry
+    entry_data = {
+        "objective": objective,
+        "objective_hash": _hash_objective(objective),
+        "session_id": session_id,
+        "approach_summary": approach_summary,
+        "approach_verbs": approach_verbs,
+        "metrics": metrics,
+        "outcome": {
+            "success": True,  # This function is for completions
+            "quality": outcome_quality,
+            "notes": outcome_notes[:500] if outcome_notes else ""
+        },
+        "tags": tags,
+        "self_score": {
+            "level": score_level,
+            "total": score_total
+        } if score_level else None,
+        # Phase 4: Track guidance feedback
+        "guidance": guidance_data
+    }
+
+    log_to_archive("objective_completion", entry_data)
+    # Include type in returned dict for consistency with archive format
+    return {"type": "objective_completion", **entry_data}
+
+
+def _hash_objective(objective: str) -> str:
+    """Create a short hash of objective for deduplication."""
+    import hashlib
+    if not objective:
+        return "unknown"
+    return hashlib.sha256(objective.encode()).hexdigest()[:12]
+
+
+def capture_objective_partial(
+    state: dict,
+    session_id: str,
+    reason: str = "unknown",
+    new_objective: str = ""
+) -> dict:
+    """
+    Capture data when an objective is abandoned or changed mid-way.
+
+    This captures valuable data about what was working before the change,
+    which can inform pattern recognition.
+
+    Args:
+        state: The active_context state dict (before change)
+        session_id: Current session ID
+        reason: "scope_changed" | "blocked" | "superseded" | "abandoned" | "unknown"
+        new_objective: The new objective being set (if any)
+
+    Returns:
+        The archive entry that was created
+    """
+    taxonomy = _load_verb_taxonomy()
+
+    objective = state.get("objective", "Unknown")
+    plan = state.get("plan", [])
+
+    # Extract what was completed before abandonment
+    approach_summary = _extract_approach_summary(plan, taxonomy)
+    approach_verbs = [step["verb"] for step in approach_summary]
+
+    # Find where we stopped
+    last_completed_idx = -1
+    for i, step in enumerate(plan):
+        if isinstance(step, dict) and step.get("status") == "completed":
+            last_completed_idx = i
+
+    # Find the next step that wasn't completed
+    abandoned_at = None
+    if last_completed_idx + 1 < len(plan):
+        next_step = plan[last_completed_idx + 1]
+        if isinstance(next_step, dict):
+            desc = next_step.get("description", "")
+            abandoned_at = {
+                "step_index": last_completed_idx + 1,
+                "description": desc[:100],
+                "verb": _normalize_step_to_verb(desc, taxonomy),
+                "status": next_step.get("status", "pending")
+            }
+
+    # Compute metrics
+    metrics = _compute_objective_metrics(state)
+
+    # Infer tags
+    tags = _infer_tags_from_objective(objective)
+
+    entry_data = {
+        "objective": objective,
+        "objective_hash": _hash_objective(objective),
+        "session_id": session_id,
+        "reason": reason,
+        "new_objective": new_objective[:200] if new_objective else None,
+        "approach_summary": approach_summary,
+        "approach_verbs": approach_verbs,
+        "abandoned_at": abandoned_at,
+        "metrics": metrics,
+        "tags": tags
+    }
+
+    log_to_archive("objective_partial", entry_data)
+    # Include type in returned dict for consistency with archive format
+    return {"type": "objective_partial", **entry_data}
+
+
+def get_objective_completions(limit: int = 50) -> list:
+    """
+    Retrieve objective completion records from archive.
+
+    Used by pattern recognition (Phase 2) to analyze past work.
+    """
+    entries = load_archive(limit=500)  # Load more, filter down
+
+    completions = [
+        e for e in entries
+        if e.get("type") == "objective_completion"
+    ]
+
+    return completions[-limit:] if len(completions) > limit else completions
+
+
+def get_objective_partials(limit: int = 50) -> list:
+    """
+    Retrieve partial/abandoned objective records from archive.
+
+    Used to understand what approaches don't work.
+    """
+    entries = load_archive(limit=500)
+
+    partials = [
+        e for e in entries
+        if e.get("type") == "objective_partial"
+    ]
+
+    return partials[-limit:] if len(partials) > limit else partials
+
+
+# =============================================================================
 # ARCHIVE RETRIEVAL
 # =============================================================================
 

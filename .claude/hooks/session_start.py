@@ -11,6 +11,7 @@ Actions:
 5. Warns about entropy issues (v2)
 6. Shows unresolved mismatches (v2)
 7. Shows Dispatch Mode status (v3.0 - canonical from dispatch_utils)
+8. Injects previous session handoff (v8.0 - context engineering)
 """
 import json
 import os
@@ -79,20 +80,41 @@ def _output_constraints(constraints):
 
 
 def _output_memory(memory):
-    """Output the memory/lessons section."""
-    if memory:
-        print(f"\nLessons from previous work:")
-        for m in memory:
-            if isinstance(m, dict):
-                trigger = m.get('trigger', '*')
-                lesson = m.get('lesson', str(m))
-                reinforced = m.get('reinforced', 0)
-                evergreen = m.get('evergreen', False)
-                strength = "+" * min(reinforced, 3) if reinforced > 0 else ""
-                prefix = "*" if evergreen else strength  # * = evergreen (never decays)
-                print(f"  - {prefix} When [{trigger}]: {lesson}")
-            else:
-                print(f"  - {m}")
+    """
+    Output top lessons only.
+
+    v7.0: Reduced from dumping all lessons to showing only top 3.
+    Lessons are already:
+    - Enforced by rules_engine.py at PreToolUse
+    - Surfaced contextually by surface_relevant_memory() at decision time
+
+    Showing all 20+ lessons was context pollution and KV-cache breakage.
+    """
+    if not memory:
+        return
+
+    # Sort by: evergreen first, then by reinforcement count
+    scored = []
+    for m in memory:
+        if isinstance(m, dict):
+            score = 1000 if m.get('evergreen', False) else m.get('reinforced', 0)
+            scored.append((score, m))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top_lessons = [m for _, m in scored[:3]]
+
+    if top_lessons:
+        total = len(memory)
+        print(f"\nTop lessons ({len(top_lessons)} of {total}, more surfaced at decision time):")
+        for m in top_lessons:
+            trigger = m.get('trigger', '*')
+            lesson = m.get('lesson', str(m))
+            evergreen = m.get('evergreen', False)
+            prefix = "★" if evergreen else "•"
+            # Truncate long lessons for cleaner output
+            if len(lesson) > 80:
+                lesson = lesson[:77] + "..."
+            print(f"  {prefix} [{trigger}]: {lesson}")
 
 
 def _output_warnings(state):
@@ -186,9 +208,71 @@ def _output_suggestion(state):
         print(f"\nSuggested: {suggestion['message']}")
 
 
+def _output_pattern_guidance(state):
+    """
+    Output pattern suggestion if in plan mode with objective but no plan.
+
+    v7.1: Surfaces learned guidance from past similar objectives.
+    DEPRECATED: v8.0 moved to context engineering, not pattern teaching.
+    """
+    mode = state.get("mode", "")
+    objective = state.get("objective", "")
+    plan = state.get("plan", [])
+
+    # Only show in plan mode when there's an objective but no plan yet
+    if mode != "plan" or not objective or (plan and len(plan) > 0):
+        return
+
+    # Skip placeholder objectives
+    if objective.lower() in ("set your objective here", "null", ""):
+        return
+
+    try:
+        from pattern_recognition import suggest_approach_for_objective
+        suggestion_text, pattern_match = suggest_approach_for_objective(objective)
+
+        if suggestion_text and pattern_match:
+            print("\n" + "-" * 60)
+            print("🎯 LEARNED GUIDANCE - Suggested Approach")
+            print("-" * 60)
+            print(suggestion_text)
+            print("-" * 60)
+            print("Use /edge to start planning (suggestion above is optional)")
+    except ImportError:
+        pass  # pattern_recognition not available
+    except Exception:
+        pass  # Suggestion failure shouldn't block session start
+
+
+def _output_session_handoff():
+    """
+    v8.0: Output previous session handoff for continuity.
+
+    This surfaces key information from the last session:
+    - Where we left off
+    - Approaches tried (and their outcomes)
+    - Drift warnings
+    - Churned files
+    """
+    try:
+        from session_handoff import get_handoff_for_new_session
+
+        handoff_text = get_handoff_for_new_session()
+        if handoff_text:
+            print(handoff_text)
+
+    except ImportError:
+        pass  # session_handoff not available
+    except Exception:
+        pass  # Handoff failure shouldn't block session start
+
+
 def output_context():
     """Output current state for Claude to see."""
     state = load_yaml_state()
+
+    # v8.0: Inject previous session handoff first (most important context)
+    _output_session_handoff()
 
     print("=" * 60)
     print("OPERATOR'S EDGE - Session Initialized")
@@ -206,6 +290,7 @@ def output_context():
         _sync_clickup(state)
         _output_dispatch_status(state)
         _output_suggestion(state)
+        _output_pattern_guidance(state)  # v7.1: Learned guidance
     else:
         print("\nWARNING: active_context.yaml missing or invalid!")
         print("Create it or run /edge-plan to initialize.")
@@ -247,6 +332,15 @@ def main():
         removed, kept = cleanup_archive()
         if removed > 0:
             print(f"[Archive] Cleaned {removed} expired entries ({kept} remaining)")
+    except Exception:
+        pass  # Best effort cleanup
+
+    # v7.0: Auto-archive completed steps to keep active_context slim
+    try:
+        from state_utils import auto_archive_completed_steps
+        archived_steps, msg = auto_archive_completed_steps(max_completed=3)
+        if archived_steps > 0:
+            print(f"[Context] {msg}")
     except Exception:
         pass  # Best effort cleanup
 

@@ -28,6 +28,75 @@ from archive_utils import log_to_archive, search_archive
 
 
 # =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+
+def _get_verification_method(yaml_state: dict) -> str:
+    """
+    Get verification method from observations (v1.1).
+
+    Uses mechanical detection via verification_utils instead of heuristic proof search.
+    Falls back to heuristic if observation file unavailable.
+
+    Args:
+        yaml_state: The active context state
+
+    Returns:
+        "subagent": Task tool with edge-reviewer/edge-test-runner detected
+        "inline": Task tool with other subagent type detected
+        "self": No Task tool evidence (self-verified)
+    """
+    # Try observation-based detection first (v1.1)
+    try:
+        from verification_utils import get_verification_method
+        return get_verification_method()
+    except ImportError:
+        pass
+
+    # Fallback: heuristic proof text search (v1.0 compatibility)
+    plan = yaml_state.get("plan", [])
+
+    for step in plan:
+        if not isinstance(step, dict) or not step.get("is_verification"):
+            continue
+
+        proof = step.get("proof", "")
+        if not proof:
+            continue
+
+        proof_lower = proof.lower()
+        subagent_indicators = [
+            "subagent",
+            "edge-reviewer",
+            "task tool",
+            "fresh context",
+            "independent verif",
+        ]
+
+        if any(indicator in proof_lower for indicator in subagent_indicators):
+            return "subagent"
+
+    return "self"
+
+
+def _check_subagent_used(yaml_state: dict) -> bool:
+    """
+    Check if a subagent was used for verification (Understanding-First v1.0).
+
+    DEPRECATED in v1.1: Use _get_verification_method() for more detail.
+    Kept for backward compatibility.
+
+    Args:
+        yaml_state: The active context state
+
+    Returns:
+        True if evidence suggests subagent was used for verification
+    """
+    method = _get_verification_method(yaml_state)
+    return method == "subagent"
+
+
+# =============================================================================
 # SCORECARD COMPUTATION
 # =============================================================================
 
@@ -89,6 +158,22 @@ def compute_objective_scorecard(
         "memory_items": len(memory)
     }
 
+    # 7. Verification (Understanding-First v1.0, v1.1 adds verification_method)
+    verification_steps = [s for s in plan if isinstance(s, dict) and s.get("is_verification")]
+    completed_verification = [s for s in verification_steps if s.get("status") == "completed"]
+    intent = yaml_state.get("intent", {})
+    verification_method = _get_verification_method(yaml_state)
+
+    verification = {
+        "intent_confirmed": intent.get("confirmed", False),
+        "verification_steps": len(verification_steps),
+        "verification_completed": len(completed_verification),
+        "used_subagent": _check_subagent_used(yaml_state),  # Backward compatibility
+        "verification_method": verification_method,  # v1.1: "subagent" | "inline" | "self"
+        "self_verified_warning": verification_method == "self",  # v1.1: Trust signal
+        "passed": len(completed_verification) > 0 if verification_steps else None,
+    }
+
     return {
         "type": "objective_scorecard",
         "timestamp": datetime.now().isoformat(),
@@ -104,7 +189,8 @@ def compute_objective_scorecard(
             "stuck_count": stuck_count,
         },
         "quality": quality,
-        "learning": learning
+        "learning": learning,
+        "verification": verification,
     }
 
 

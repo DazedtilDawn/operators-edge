@@ -20,6 +20,7 @@ from edge_utils import get_state_dir
 from state_utils import (
     write_json_atomic, load_yaml_state,
     get_runtime_section, update_runtime_section,
+    is_intent_confirmed,
 )
 
 # Feature flag: set to True to use YAML runtime section (v5 schema)
@@ -185,6 +186,13 @@ def determine_next_action(yaml_state: dict) -> Tuple[str, str, JunctionType]:
         - reason: Why this command was chosen
         - junction_type: Whether this is a junction
     """
+    # Understanding-First v1.0: Check intent before anything else
+    # BACKWARD COMPATIBILITY: Only check if user_wants is set (project opted in)
+    intent = yaml_state.get("intent", {})
+    user_wants = intent.get("user_wants", "")
+    if user_wants and not is_intent_confirmed(yaml_state):
+        return ("intent-confirm", f"Intent set but not confirmed: {user_wants[:50]}...", JunctionType.AMBIGUOUS)
+
     objective = yaml_state.get("objective")
     plan = yaml_state.get("plan", [])
     current_step = yaml_state.get("current_step", 1)
@@ -296,7 +304,26 @@ def increment_stuck_counter(dispatch_state: dict) -> int:
 # =============================================================================
 
 def start_dispatch() -> dict:
-    """Start dispatch mode, return initial state."""
+    """
+    Start dispatch mode, return initial state.
+
+    Understanding-First v1.0: Dispatch requires confirmed intent.
+    If intent is not confirmed, creates a junction instead of starting.
+    BACKWARD COMPATIBILITY: Only checks if user_wants is set (project opted in).
+    """
+    yaml_state = load_yaml_state() or {}
+
+    # Check intent before starting dispatch (only if project uses intent system)
+    intent = yaml_state.get("intent", {})
+    user_wants = intent.get("user_wants", "")
+    if user_wants and not is_intent_confirmed(yaml_state):
+        state = load_dispatch_state()
+        reason = f"Intent set but not confirmed: {user_wants[:50]}..."
+
+        # Create junction instead of starting
+        pause_at_junction(state, JunctionType.AMBIGUOUS, reason)
+        return state
+
     state = load_dispatch_state()
     state["enabled"] = True
     state["state"] = DispatchState.RUNNING.value
@@ -319,28 +346,25 @@ def stop_dispatch(reason: str = "User stopped") -> dict:
 
 def pause_at_junction(dispatch_state: dict, junction_type: JunctionType, reason: str) -> None:
     """Pause dispatch at a junction."""
+    # v5.1: Write ONLY to junction_state.json (single source of truth)
     pending, warning = set_pending_junction(junction_type.value, {"reason": reason}, source="dispatch")
     if warning:
         # In readonly mode, still update local state but log warning
         print(f"[WARNING] {warning}")
     dispatch_state["state"] = DispatchState.JUNCTION.value
-    dispatch_state["junction"] = {
-        "type": junction_type.value,
-        "reason": reason,
-        "timestamp": datetime.now().isoformat(),
-        "id": pending.get("id") if pending else None,
-    }
+    # v5.1: Junction data is only in junction_state.json (single source of truth)
     update_dispatch_stats(dispatch_state, "junctions_hit")
     save_dispatch_state(dispatch_state)
 
 
 def resume_from_junction(dispatch_state: dict) -> None:
     """Resume dispatch after junction approval."""
+    # v5.1: Junction is cleared only in junction_state.json (single source)
     _, warning = clear_pending_junction("approve")
     if warning:
         print(f"[WARNING] {warning}")
     dispatch_state["state"] = DispatchState.RUNNING.value
-    dispatch_state["junction"] = None
+    # v5.1: REMOVED dispatch_state["junction"] = None - not needed
     save_dispatch_state(dispatch_state)
 
 
@@ -387,7 +411,7 @@ def get_dispatch_status() -> Dict[str, Any]:
         "state": state.get("state", DispatchState.IDLE.value),
         "iteration": state.get("iteration", 0),
         "stuck_count": state.get("stuck_count", 0),
-        "junction": pending or state.get("junction"),
+        "junction": pending,  # v5.1: Single source of truth (junction_state.json only)
         "stats": state.get("stats", {}),
         "objective": yaml_state.get("objective"),
         "plan_steps": len(yaml_state.get("plan", [])),

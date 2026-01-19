@@ -1,0 +1,332 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# LEARNED GUIDANCE SYSTEM - Configuration
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# This file contains:
+# 1. Canonical verb taxonomy for normalizing step descriptions
+# 2. Seed patterns for cold-start suggestions
+# 3. Confidence thresholds and decay rules
+#
+# patterns.yaml (derived from archive) is the runtime pattern store.
+# This file is static configuration.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VERB TAXONOMY
+# ─────────────────────────────────────────────────────────────────────────────
+# Maps step descriptions to canonical verbs for pattern clustering.
+# Each canonical verb has synonyms that normalize to it.
+
+verb_taxonomy:
+  scope:
+    description: "Define boundaries, identify what to work on"
+    synonyms:
+      - "define"
+      - "identify"
+      - "bound"
+      - "scope"
+      - "map"
+      - "analyze"
+      - "understand"
+      - "investigate"
+      - "explore"
+      - "discover"
+      - "assess"
+      - "audit"
+      - "review"
+      - "examine"
+
+  plan:
+    description: "Create or refine the approach"
+    synonyms:
+      - "plan"
+      - "design"
+      - "architect"
+      - "outline"
+      - "structure"
+      - "organize"
+      - "prepare"
+      - "draft"
+
+  test:
+    description: "Write or run tests, validate behavior"
+    synonyms:
+      - "test"
+      - "verify"
+      - "validate"
+      - "check"
+      - "assert"
+      - "confirm"
+      - "ensure"
+      - "spec"
+      - "coverage"
+
+  build:
+    description: "Create new code or components"
+    synonyms:
+      - "build"
+      - "create"
+      - "implement"
+      - "write"
+      - "add"
+      - "develop"
+      - "construct"
+      - "generate"
+      - "produce"
+
+  extract:
+    description: "Separate, modularize, refactor"
+    synonyms:
+      - "extract"
+      - "split"
+      - "separate"
+      - "modular"
+      - "refactor"
+      - "isolate"
+      - "decouple"
+      - "decompose"
+
+  integrate:
+    description: "Connect, wire up, update consumers"
+    synonyms:
+      - "integrate"
+      - "connect"
+      - "wire"
+      - "update"
+      - "consume"
+      - "migrate"
+      - "adopt"
+      - "incorporate"
+      - "merge"
+
+  fix:
+    description: "Repair bugs, resolve issues"
+    synonyms:
+      - "fix"
+      - "repair"
+      - "resolve"
+      - "debug"
+      - "patch"
+      - "correct"
+      - "address"
+      - "handle"
+
+  clean:
+    description: "Remove, delete, prune"
+    synonyms:
+      - "clean"
+      - "remove"
+      - "delete"
+      - "prune"
+      - "deprecate"
+      - "archive"
+      - "drop"
+
+  document:
+    description: "Write docs, comments, explanations"
+    synonyms:
+      - "document"
+      - "comment"
+      - "explain"
+      - "describe"
+      - "annotate"
+      - "readme"
+      - "changelog"
+
+  deploy:
+    description: "Release, publish, ship"
+    synonyms:
+      - "deploy"
+      - "release"
+      - "publish"
+      - "ship"
+      - "push"
+      - "commit"
+      - "tag"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SEED PATTERNS
+# ─────────────────────────────────────────────────────────────────────────────
+# Pre-defined patterns for cold-start. Lower confidence than learned patterns.
+# These provide suggestions before the system has learned from your work.
+
+seed_patterns:
+  - id: "seed-refactor-module"
+    name: "Module Refactoring"
+    source: "template"
+    description: "Extract and reorganize code into cleaner modules"
+    trigger_keywords:
+      - "refactor"
+      - "extract"
+      - "modular"
+      - "split"
+      - "reorganize"
+    exclude_keywords:
+      - "bug"
+      - "fix"
+      - "broken"
+      - "error"
+    approach:
+      - verb: "scope"
+        description: "Identify boundaries and dependencies"
+      - verb: "test"
+        description: "Ensure existing behavior is covered by tests"
+      - verb: "extract"
+        description: "Move code to new structure"
+      - verb: "integrate"
+        description: "Update consumers to use new structure"
+      - verb: "test"
+        description: "Verify all tests pass"
+    confidence: 0.5
+    min_samples_to_override: 2  # Learned pattern needs 2+ samples to replace
+
+  - id: "seed-new-feature"
+    name: "New Feature Implementation"
+    source: "template"
+    description: "Build a new capability from scratch"
+    trigger_keywords:
+      - "add"
+      - "implement"
+      - "create"
+      - "build"
+      - "new feature"
+    exclude_keywords:
+      - "refactor"
+      - "fix"
+      - "migrate"
+    approach:
+      - verb: "scope"
+        description: "Define requirements and success criteria"
+      - verb: "plan"
+        description: "Design the approach"
+      - verb: "build"
+        description: "Implement the feature"
+      - verb: "test"
+        description: "Write and run tests"
+      - verb: "document"
+        description: "Update documentation"
+    confidence: 0.5
+    min_samples_to_override: 2
+
+  - id: "seed-bug-fix"
+    name: "Bug Fix"
+    source: "template"
+    description: "Diagnose and repair a defect"
+    trigger_keywords:
+      - "fix"
+      - "bug"
+      - "broken"
+      - "error"
+      - "issue"
+      - "problem"
+    exclude_keywords:
+      - "refactor"
+      - "new"
+      - "feature"
+    approach:
+      - verb: "scope"
+        description: "Reproduce and understand the bug"
+      - verb: "test"
+        description: "Write a failing test that captures the bug"
+      - verb: "fix"
+        description: "Implement the fix"
+      - verb: "test"
+        description: "Verify the test passes"
+    confidence: 0.5
+    min_samples_to_override: 2
+
+  - id: "seed-migration"
+    name: "Migration/Upgrade"
+    source: "template"
+    description: "Move from one system/version to another"
+    trigger_keywords:
+      - "migrate"
+      - "upgrade"
+      - "move"
+      - "transition"
+      - "convert"
+    exclude_keywords:
+      - "new"
+      - "feature"
+    approach:
+      - verb: "scope"
+        description: "Map what needs to migrate"
+      - verb: "test"
+        description: "Ensure current behavior is tested"
+      - verb: "build"
+        description: "Create migration path"
+      - verb: "integrate"
+        description: "Execute migration"
+      - verb: "test"
+        description: "Verify nothing broke"
+      - verb: "clean"
+        description: "Remove old code/data"
+    confidence: 0.5
+    min_samples_to_override: 2
+
+  - id: "seed-documentation"
+    name: "Documentation"
+    source: "template"
+    description: "Create or update documentation"
+    trigger_keywords:
+      - "document"
+      - "readme"
+      - "docs"
+      - "explain"
+      - "guide"
+    exclude_keywords: []
+    approach:
+      - verb: "scope"
+        description: "Identify what needs documenting"
+      - verb: "document"
+        description: "Write the documentation"
+      - verb: "test"
+        description: "Verify examples work"
+    confidence: 0.5
+    min_samples_to_override: 2
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONFIDENCE SETTINGS
+# ─────────────────────────────────────────────────────────────────────────────
+
+confidence:
+  # Minimum confidence to show a suggestion
+  min_to_suggest: 0.4
+
+  # Minimum samples for a learned pattern to suggest
+  min_samples: 2
+
+  # Update formula weights
+  update:
+    followed_success_boost: 0.2    # confidence + (1 - confidence) * this
+    followed_failure_penalty: 0.7  # confidence * this
+    ignored_success_penalty: 0.9   # confidence * this (slight drop)
+    ignored_failure_change: 1.0    # no change
+
+  # Decay settings
+  decay:
+    days_until_decay: 30           # Start decaying after this many days
+    decay_rate: 0.1                # Reduce confidence by this much
+    min_after_decay: 0.3           # Don't decay below this
+
+  # Invalidation
+  invalidation:
+    consecutive_rejections: 3      # Archive after this many rejections
+    min_confidence: 0.3            # Archive if confidence drops below
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MATCHING SETTINGS
+# ─────────────────────────────────────────────────────────────────────────────
+
+matching:
+  # When multiple patterns match, how to choose
+  strategy: "highest_confidence"  # or "most_specific" or "all"
+
+  # Maximum suggestions to show (if strategy is "all")
+  max_suggestions: 1
+
+  # Keyword matching
+  keywords:
+    # Require at least this many keyword matches
+    min_matches: 1
+    # Exclude if any exclude_keyword matches
+    exclude_is_hard: true

@@ -18,7 +18,7 @@ import json
 import hashlib
 
 from gear_config import (
-    Gear, GearTransition, GearState,
+    Gear, GearTransition, GearState, QualityGateOverride,
     detect_current_gear, get_default_gear_state,
     get_gear_behavior, get_valid_transitions,
     format_gear_status, GEAR_EMOJI, GEAR_LABELS,
@@ -36,13 +36,14 @@ from gear_dream import (
     should_transition_from_dream, format_dream_status,
 )
 from quality_gate import (
-    run_quality_gate, QualityGateResult,
+    run_quality_gate, QualityGateResult, QualityCheck,
     format_quality_gate_result, format_quality_junction,
 )
 from state_utils import (
     write_json_atomic, load_yaml_state,
     get_runtime_section, update_runtime_section,
 )
+from proof_utils import get_current_session_id
 
 # Feature flag: set to True to use YAML runtime section (v5 schema)
 USE_YAML_RUNTIME = True
@@ -242,6 +243,78 @@ def _compute_completion_epoch(state: Dict[str, Any]) -> Optional[str]:
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _check_quality_gate_override(
+    gear_state: GearState,
+    state: Dict[str, Any],
+    failed_checks: Optional[list] = None
+) -> Tuple[bool, list]:
+    """
+    Check if a valid quality gate override exists (v5.2).
+
+    Returns:
+        (skip_gate, remaining_failures)
+        - Full mode: skip_gate=True, remaining=[]
+        - Check-specific mode: skip_gate=True only if ALL failed checks are approved
+        - No override/invalid: skip_gate=False, remaining=failed_checks
+
+    Invalidates stale overrides automatically.
+    Valid override = same session + same objective hash
+    """
+    override = gear_state.quality_gate_override
+    if not override:
+        return (False, failed_checks or [])
+
+    # Handle both dict (v5.1) and QualityGateOverride (v5.2)
+    if isinstance(override, dict):
+        # Legacy v5.1 dict format - treat as full override
+        session_id = override.get("session_id")
+        objective_hash = override.get("objective_hash")
+        mode = "full"
+        approved_checks = []
+    else:
+        # v5.2 QualityGateOverride dataclass
+        session_id = override.session_id
+        objective_hash = override.objective_hash
+        mode = override.mode
+        approved_checks = override.approved_checks or []
+
+    # Check session match
+    current_session = get_current_session_id()
+    if session_id != current_session:
+        # Different session - invalidate override
+        gear_state.quality_gate_override = None
+        save_gear_state(gear_state)
+        return (False, failed_checks or [])
+
+    # Check objective match
+    objective = state.get("objective", "") if state else ""
+    if objective_hash != hash(objective):
+        # Different objective - invalidate override
+        gear_state.quality_gate_override = None
+        save_gear_state(gear_state)
+        return (False, failed_checks or [])
+
+    # Valid override - check mode
+    if mode == "full":
+        # Full override - skip entire gate
+        return (True, [])
+
+    # Check-specific mode - filter failures
+    if mode == "check_specific" and failed_checks:
+        # Filter out approved checks
+        remaining = [
+            c for c in failed_checks
+            if (c.name if hasattr(c, 'name') else c.get("name", "")) not in approved_checks
+        ]
+        # Skip gate only if ALL failures are approved
+        skip = len(remaining) == 0
+        return (skip, remaining)
+
+    # Unknown mode or no failures provided - don't skip
+    return (False, failed_checks or [])
+
 
 def execute_transition(
     gear_state: GearState,
@@ -448,11 +521,90 @@ def _run_active(
                     display_message="Quality gate already passed → Patrol",
                 )
 
+            # v5.2: Check for FULL quality gate override (skip gate entirely)
+            skip_full, _ = _check_quality_gate_override(gear_state, state, failed_checks=None)
+            if skip_full:
+                new_state = execute_transition(gear_state, transition)
+                if completion_epoch:
+                    new_state.completion_epoch = completion_epoch
+                success, error = save_gear_state(new_state)
+                if not success:
+                    return GearEngineResult(
+                        gear_executed=Gear.ACTIVE,
+                        transitioned=False,
+                        new_gear=None,
+                        transition_type=None,
+                        gear_result=result.to_dict(),
+                        junction_hit=False,
+                        junction_type=None,
+                        junction_reason=None,
+                        continue_loop=False,
+                        display_message=f"Quality gate override active but transition failed: {error}",
+                    )
+                return GearEngineResult(
+                    gear_executed=Gear.ACTIVE,
+                    transitioned=True,
+                    new_gear=Gear.PATROL,
+                    transition_type=transition,
+                    gear_result=result.to_dict(),
+                    junction_hit=False,
+                    junction_type=None,
+                    junction_reason=None,
+                    continue_loop=True,
+                    display_message="Quality gate bypassed (full override) → Patrol",
+                )
+
             # Run quality gate before allowing transition
             quality_result = run_quality_gate(state, project_dir)
 
             if not quality_result.passed:
-                # Quality gate failed - junction instead of transition
+                # v5.2: Check for check-specific override on failed checks
+                skip_specific, remaining_failures = _check_quality_gate_override(
+                    gear_state, state, failed_checks=quality_result.failed_checks
+                )
+
+                if skip_specific:
+                    # All failed checks were approved - proceed with transition
+                    new_state = execute_transition(gear_state, transition)
+                    if completion_epoch:
+                        new_state.completion_epoch = completion_epoch
+                    success, error = save_gear_state(new_state)
+                    if not success:
+                        return GearEngineResult(
+                            gear_executed=Gear.ACTIVE,
+                            transitioned=False,
+                            new_gear=None,
+                            transition_type=None,
+                            gear_result=result.to_dict(),
+                            junction_hit=False,
+                            junction_type=None,
+                            junction_reason=None,
+                            continue_loop=False,
+                            display_message=f"Quality gate check-specific override active but transition failed: {error}",
+                        )
+                    approved_count = len(quality_result.failed_checks) - len(remaining_failures)
+                    return GearEngineResult(
+                        gear_executed=Gear.ACTIVE,
+                        transitioned=True,
+                        new_gear=Gear.PATROL,
+                        transition_type=transition,
+                        gear_result=result.to_dict(),
+                        junction_hit=False,
+                        junction_type=None,
+                        junction_reason=None,
+                        continue_loop=True,
+                        display_message=f"Quality gate bypassed ({approved_count} check(s) approved) → Patrol",
+                    )
+
+                # Some checks still failing - create junction with remaining failures
+                # Create modified quality result with only remaining failures
+                remaining_result = QualityGateResult(
+                    passed=False,
+                    checks=quality_result.checks,
+                    failed_checks=remaining_failures,
+                    warning_checks=quality_result.warning_checks,
+                    summary=f"{len(remaining_failures)} check(s) still failing",
+                )
                 return GearEngineResult(
                     gear_executed=Gear.ACTIVE,
                     transitioned=False,
@@ -460,13 +612,13 @@ def _run_active(
                     transition_type=None,
                     gear_result={
                         **result.to_dict(),
-                        "quality_gate": quality_result.to_dict(),
+                        "quality_gate": remaining_result.to_dict(),
                     },
                     junction_hit=True,
                     junction_type="quality_gate",
-                    junction_reason=quality_result.summary,
+                    junction_reason=remaining_result.summary,
                     continue_loop=False,  # Wait for fixes
-                    display_message=format_quality_junction(quality_result),
+                    display_message=format_quality_junction(remaining_result),
                 )
 
             # Quality gate passed - proceed with transition
