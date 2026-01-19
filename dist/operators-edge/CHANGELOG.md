@@ -196,8 +196,119 @@ When a fix is surfaced and Claude runs the suggested command:
 
 - 51 tests
 
+### Phase 10.2: Smart Read (`smart_read.py`) ✓
+**Purpose:** RLM-inspired - suggest targeted file reads instead of full context consumption
+
+**The Problem:** Claude reads 5000-line file → context bloat. Most lines aren't relevant.
+Claude already has grep/head/tail access but doesn't always use it proactively.
+
+**The Solution:** Detect large file reads before they happen, suggest targeted approaches:
+
+**Smart Read Suggestions:**
+- Triggers on Read tool for files > 500 lines
+- File-type specific suggestions (Python: grep for def/class, JSON: head for schema, etc.)
+- Severity levels: info (500+), warning (2000+), critical (5000+)
+- Respects intervention level for formatting
+
+**File Type Support:**
+- Python (.py): grep for functions/classes, imports
+- JavaScript/TypeScript (.js/.ts/.tsx): grep for exports, functions
+- JSON (.yaml/.yml): head for structure, key extraction
+- Logs (.log): tail for recent, grep for errors
+- SQL (.sql): grep for CREATE/ALTER TABLE
+- Go (.go): grep for func/type
+- And more...
+
+**Integration:**
+- `pre_tool.py`: Check 9 - surfaces suggestion before Read tool
+- Respects active intervention level for formatting
+
+- 39 tests
+
+### Phase 10.4: Auto-Checkpoint (`auto_checkpoint.py`) ✓
+**Purpose:** RLM-inspired - generate compressed checkpoints at natural breakpoints
+
+**The Problem:** Sessions drift and context fills up without structured stopping points.
+Handoffs lose continuity or carry too much baggage. No proactive checkpoint suggestions.
+
+**The Solution:** Detect natural breakpoints and offer checkpoint/compaction:
+
+**Breakpoint Detection:**
+- **Time threshold**: 30+ minutes of session activity
+- **Tool calls threshold**: 50+ tool calls
+- **Context threshold**: 60%+ context usage (urgent at 80%+)
+- **Git commits**: Natural breakpoint after every commit
+- **Step completion**: Detects "step complete", "tests passing", etc.
+- **Error resolution**: After resolving 3+ errors
+
+**Checkpoint Generation:**
+- Extracts accomplishments from session log (commits, test passes)
+- Extracts files modified (unique filenames)
+- Extracts pending items from state plan
+- Records session metrics (context %, duration, tool calls)
+- Saves to `.proof/checkpoints/` for retrieval
+
+**Compaction Offers:**
+- Urgency levels: suggestion, recommendation, urgent
+- Formatted summary with accomplished/pending/metrics
+- Includes compaction advice for context management
+
+**Hardening (Flaw Remediation):**
+- **Cooldown System**: 10-minute cooldown between offers (prevents spam)
+- **Config Loading**: Thresholds loadable from `v8_config.json`
+- **Defensive Git Parsing**: Locale-agnostic commit message extraction
+- **Debug Logging**: Errors logged to `.proof/debug.log` (not stderr)
+- **Import Documentation**: Deferred imports documented for circular dep safety
+
+**Integration:**
+- `post_tool.py`: Checks for breakpoints after Edit/Write/Bash
+- Respects active intervention level for formatting
+- Checkpoints stored for session continuity
+
+- 57 tests
+
+### Phase 10.3: Self-Clarification (`self_clarify.py`) ✓
+**Purpose:** RLM-inspired - when stuck, force stepping back to clarify the actual problem
+
+**The Problem:** Claude gets stuck in loops (editing same file repeatedly, same errors,
+ignored drift signals). The "try same thing again" anti-pattern wastes context and time.
+
+**The Solution:** Detect "stuck" patterns and inject clarification prompts:
+
+**Stuck Pattern Detection:**
+- **Drift Ignored**: 3+ drift signals fired without action
+- **Error Repeat**: Same error message 3+ times (line numbers normalized)
+- **File Loop**: Same file edited 5+ times
+- **Tool Loop**: Alternating tool patterns with high failure rate
+
+**Clarification Prompts:**
+- Surfaces recent actions summary
+- Lists recent errors
+- Shows files being edited repeatedly
+- Forces articulating:
+  - What is the ACTUAL problem being solved?
+  - Why haven't previous attempts worked?
+  - What would success look like?
+
+**Cooldown System:**
+- 15-minute cooldown between clarification prompts
+- Prevents nagging/fatigue
+- Configurable via `v8_config.json`
+
+**Severity Levels:**
+- **suggestion**: Mild patterns detected (advise level filters these)
+- **recommendation**: Moderate patterns (2+ moderate or 1 severe)
+- **urgent**: Severe patterns (multiple issues compounding)
+
+**Integration:**
+- `pre_tool.py`: Check 10 - surfaces clarification before tool execution
+- Respects active intervention level for filtering
+- Logged to `.proof/clarifications.jsonl` for analysis
+
+- 45 tests
+
 ### Test Coverage
-- 325 new tests for v8.0:
+- 466+ new tests for v8.0:
   - Phase 1 (drift): 24 tests
   - Phase 2 (context): 33 tests
   - Phase 3 (knowledge): 31 tests
@@ -207,7 +318,10 @@ When a fix is surfaced and Claude runs the suggested command:
   - Phase 7 (effectiveness): 50 tests
   - Phase 8 (intervention): 41 tests
   - Phase 9 (outcomes): 51 tests
-- Total core tests: 440+
+  - Phase 10.2 (smart read): 39 tests
+  - Phase 10.3 (self-clarify): 45 tests
+  - Phase 10.4 (auto-checkpoint): 57 tests
+- Total core tests: 575+
 
 ---
 
