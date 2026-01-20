@@ -3,33 +3,43 @@
 
 # Current session (updated by session_start hook)
 session:
-  id: "20260114-understanding-first"
-  started_at: "2026-01-14T10:00:00"
-  note: "Understanding-First Architecture v1.0"
+  id: "20260120-fork-v1.1"
+  started_at: "2026-01-20T15:00:00"
+  note: "Smart Forking v1.1 complete + Windows 11 compatibility verified (pathlib, UTF-8 encoding, env vars)"
 
   state_hash_start: null
-mode: "done"
+mode: "complete"
 
 # Intent verification (v1.0) - required before planning/editing
 # user_wants: What the user actually asked for
 # success_looks_like: Observable criteria for success
 # confirmed: Must be true before non-trivial edits
 intent:
-  user_wants: "Implement Phase 10 Active Context Management"
-  success_looks_like: "Phase 10.4 Auto-Checkpoint implemented with 28 tests, integrated into hooks"
+  user_wants: "Enhance Smart Forking with cleaner summaries, FAISS scale, auto-suggest, cross-project search"
+  success_looks_like: "Higher similarity scores, auto-suggestions at session start, cross-project works, FAISS optional"
   confirmed: true
-  confirmed_at: "2026-01-19T10:00:00"
+  confirmed_at: "2026-01-20T15:56:00"
 
 # What are we trying to achieve?
-objective: "v8.0 Phase 10 Implementation - Complete"
+objective: "Smart Forking v1.1 - Cleaner summaries, FAISS scale, auto-suggest, cross-project"
 
 # Current position in the plan
-current_step: 0
+current_step: 3
 
 # The plan - each step must have description, status, and proof
 # Status: pending | in_progress | completed | blocked
 # is_verification: true marks verification steps (required for completion)
-plan: []
+plan:
+  - description: "Auto-suggest at session start - show relevant sessions based on objective"
+    status: "completed"
+    proof: "suggest_similar_sessions() with 2s timeout, integrated into session_start.py, shows top 3"
+  - description: "FAISS integration - optional ANN search with numpy fallback"
+    status: "completed"
+    proof: "FAISS optional import, search_similar has 3 backends (FAISS->numpy->pure Python), status shows backend"
+  - description: "Add tests for new features and verify end-to-end"
+    status: "completed"
+    proof: "58 tests pass (24 fork_utils + 34 fork_indexer), end-to-end search verified"
+    is_verification: true
 next_focus:
   # Gap Analysis Roadmap (P0-P2 priority)
   - "P0: Auto-detect mismatches from hook failures (PreToolUse blocks, PostToolUse unexpected state)"
@@ -42,28 +52,41 @@ next_focus:
   # Completed (v8.0 Phase 10)
   # - "Phase 10.2: Smart Read - DONE - 39 tests"
   # - "Phase 10.4: Auto-Checkpoint - DONE - 28 tests (implemented 2026-01-19)"
+  # Backburner (future exploration)
+  # - "Edge-RLM: Recursive subcalls via CLI headless mode (claude -p) for large context analysis"
+  #   Use cases: proof log forensics, codebase-wide understanding, large doc analysis
+  #   Approach: chunk context → subprocess per chunk → aggregate findings
+  #   Status: Architecturally feasible, low priority vs focused daily tasks
+  # - "AgeMem Eval Metrics: Memory Quality + Context Efficiency + Tool Discipline"
+  #   Core system already exists (memory section, decay, handoffs) - different philosophy (mechanical vs explicit)
+  #   Steal: evaluation metrics for effectiveness_analyzer.py, three-stage regression harness
+  #   Skip: explicit memory tools (conflicts with mechanical enforcement philosophy)
+  # - "Smart Forking (/edge-fork): Semantic session retrieval + fork from relevant past sessions"
+  #   Feasibility tested: --resume and --fork-session work, sessions in ~/.claude/projects/<project>/*.jsonl
+  #   Embedding model: nomic-embed-text-v1.5 (84MB, 8K context, LM Studio compatible)
+  #   Alternatives: all-MiniLM-L6-v2 (23MB, faster), BGE-M3 (568MB, multilingual)
+  #   Status: Core mechanics verified, ready for implementation planning when prioritized
   # Completed (v3.10.1)
   # - "P1: Reinforcement loop closure - DONE (v3.10.1) - proof vitality protects lessons from decay"
   # Completed (v3.10)
   # - "P0: Evergreen principles library - DONE (v3.10)"
 
 constraints:
-  - "Single canonical state - active_context.yaml is the ONLY truth"
-  - "Runtime state (junction/gear/dispatch) goes in runtime: section, not separate files"
-  - "Atomic writes with locking must be preserved during migration"
-  - "Backward compatibility - migrate existing JSON files on first read"
-  - "No breaking changes to /edge-* command behavior"
+  - "Must not break existing /edge-fork commands"
+  - "Must work without FAISS installed (graceful numpy fallback)"
+  - "Session start hook must remain fast (<2s)"
+  - "Cross-project search must respect project boundaries by default"
 
 # Known risks and how we're mitigating them
 risks:
-  - risk: "YAML is slower than JSON for frequent writes (junction, dispatch)"
-    mitigation: "Keep runtime section small, batch updates where possible, benchmark before/after"
-  - risk: "Lock contention - multiple modules writing to same file"
-    mitigation: "Use state_utils.atomic_yaml_write() with short critical sections"
-  - risk: "Migration breaks existing sessions with JSON state"
-    mitigation: "Auto-migrate JSON to YAML on first read, don't delete until confirmed working"
-  - risk: "Tests depend on JSON file paths"
-    mitigation: "Update test fixtures, add migration tests"
+  - risk: "Auto-suggest slows session start"
+    mitigation: "Make async/optional, cache recent query vectors, set timeout"
+  - risk: "FAISS not available on all systems"
+    mitigation: "Keep numpy linear search as fallback, make FAISS optional import"
+  - risk: "Cross-project exposes unrelated context"
+    mitigation: "Require --all-projects flag, filter by recency, minimum similarity threshold"
+  - risk: "Cleaner extraction removes useful context"
+    mitigation: "Test before/after similarity scores on sample queries"
 
 mismatches: []
   # Archived: mismatch-20260112-000001 - pytest fallback to unittest (resolved)
@@ -147,6 +170,14 @@ memory:
     lesson: "Lessons can auto-learn file patterns from proof - after 3+ successful applications to similar files, the system infers a glob pattern and only surfaces lessons for matching file types"
     reinforced: 1
     last_used: "2026-01-13"
+  - trigger: "thread + timeout"
+    lesson: "Use daemon=True for timeout threads to avoid orphan leaks; thread.join(timeout=N) leaves thread running if timeout expires"
+    reinforced: 1
+    last_used: "2026-01-20"
+  - trigger: "debug logging + silent failures"
+    lesson: "Replace bare 'except: pass' with EDGE_DEBUG-gated stderr logging - preserves 'don't crash' while enabling diagnostics"
+    reinforced: 1
+    last_used: "2026-01-20"
 
 
 # Self-assessment

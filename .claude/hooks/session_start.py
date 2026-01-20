@@ -267,6 +267,59 @@ def _output_session_handoff():
         pass  # Handoff failure shouldn't block session start
 
 
+def _output_fork_suggestions(state):
+    """
+    v1.1: Suggest related sessions based on current objective.
+
+    Uses Smart Forking's semantic search to find similar past sessions.
+    Has a 2s timeout to avoid slowing session start.
+    """
+    try:
+        from fork_config import FORK_MIN_OBJECTIVE_DISPLAY
+    except ImportError:
+        FORK_MIN_OBJECTIVE_DISPLAY = 20  # Fallback
+
+    objective = state.get("objective", "")
+    if not objective or len(objective.strip()) < FORK_MIN_OBJECTIVE_DISPLAY:
+        return
+
+    # Skip placeholder objectives
+    if objective.lower() in ("set your objective here", "null", ""):
+        return
+
+    try:
+        from fork_indexer import suggest_similar_sessions
+
+        # Use defaults from fork_config (they're baked into suggest_similar_sessions)
+        suggestions = suggest_similar_sessions(objective=objective)
+
+        if not suggestions:
+            return
+
+        print("\n" + "-" * 60)
+        print("📚 RELATED SESSIONS - Relevant historical context")
+        print("-" * 60)
+
+        for i, s in enumerate(suggestions, 1):
+            short_id = s["session_id"][:8]
+            project = f" [{s['project_name']}]" if s.get("project_name") else ""
+            score = s["score"]
+            preview = s["summary_preview"][:60]
+            print(f"  {i}. [{score:.2f}] {short_id}{project}")
+            print(f"     \"{preview}...\"")
+
+        print("-" * 60)
+        print("Fork with: claude --resume <id> --fork-session")
+
+    except ImportError:
+        pass  # fork_indexer not available
+    except Exception as e:
+        # Don't block session start, but log if debugging
+        if os.environ.get("EDGE_DEBUG"):
+            import sys
+            print(f"[fork] _output_fork_suggestions: {e}", file=sys.stderr)
+
+
 def output_context():
     """Output current state for Claude to see."""
     state = load_yaml_state()
@@ -289,6 +342,7 @@ def output_context():
         _output_reflection()
         _sync_clickup(state)
         _output_dispatch_status(state)
+        _output_fork_suggestions(state)  # v1.1: Smart Forking suggestions
         _output_suggestion(state)
         _output_pattern_guidance(state)  # v7.1: Learned guidance
     else:

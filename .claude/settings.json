@@ -41,6 +41,15 @@
         ]
       },
       {
+        "matcher": "/edge-fork",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/fork_skill_hook.py\""
+          }
+        ]
+      },
+      {
         "matcher": "/edge",
         "hooks": [
           {
