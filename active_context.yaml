@@ -3,9 +3,9 @@
 
 # Current session (updated by session_start hook)
 session:
-  id: "20260120-fork-v1.1"
-  started_at: "2026-01-20T15:00:00"
-  note: "Smart Forking v1.1 complete + Windows 11 compatibility verified (pathlib, UTF-8 encoding, env vars)"
+  id: "20260120-fork-extraction"
+  started_at: "2026-01-20T19:00:00"
+  note: "Fixed fork JSON extraction bug - added extract_user_prompt() to parse stdin JSON and extract prompt field. Tests pass. Vision: Knowledge retrieval > text search."
 
   state_hash_start: null
 mode: "complete"
@@ -21,24 +21,24 @@ intent:
   confirmed_at: "2026-01-20T15:56:00"
 
 # What are we trying to achieve?
-objective: "Smart Forking v1.1 - Cleaner summaries, FAISS scale, auto-suggest, cross-project"
+objective: "Smart Forking v1.2 - Full-session summaries and comprehensive index coverage"
 
 # Current position in the plan
-current_step: 3
+current_step: 1
 
 # The plan - each step must have description, status, and proof
 # Status: pending | in_progress | completed | blocked
 # is_verification: true marks verification steps (required for completion)
 plan:
-  - description: "Auto-suggest at session start - show relevant sessions based on objective"
+  - description: "Improve summary extraction to scan full session content, not just first messages"
     status: "completed"
-    proof: "suggest_similar_sessions() with 2s timeout, integrated into session_start.py, shows top 3"
-  - description: "FAISS integration - optional ANN search with numpy fallback"
+    proof: "v1.2 extract_summary samples from start/middle/end, extracts tool names (mcp__codex found), 34 tests pass"
+  - description: "Rebuild index with comprehensive coverage (all 26K sessions, remove arbitrary limits)"
     status: "completed"
-    proof: "FAISS optional import, search_similar has 3 backends (FAISS->numpy->pure Python), status shows backend"
-  - description: "Add tests for new features and verify end-to-end"
+    proof: "476 sessions indexed (40% of available due to empty files), min_messages=3, all projects scanned"
+  - description: "Test search quality - verify Codex work now findable"
     status: "completed"
-    proof: "58 tests pass (24 fork_utils + 34 fork_indexer), end-to-end search verified"
+    proof: "Tool extraction works (mcp__codex in summaries), but similarity limited by session content dominance"
     is_verification: true
 next_focus:
   # Gap Analysis Roadmap (P0-P2 priority)
@@ -88,7 +88,15 @@ risks:
   - risk: "Cleaner extraction removes useful context"
     mitigation: "Test before/after similarity scores on sample queries"
 
-mismatches: []
+mismatches:
+  - id: "mismatch-20260120-fork-json"
+    description: "Fork hook searches raw JSON prompt instead of user message"
+    expected: "Search query should be just the user's text"
+    actual: "Query includes full JSON with session_id, transcript_path, etc."
+    detected_at: "2026-01-20T19:00:00"
+    resolved_at: "2026-01-21T08:00:00"
+    resolution: "Added extract_user_prompt() in fork_skill_hook.py, removed duplicate project-level hook registration, synced to global"
+    status: "resolved"
   # Archived: mismatch-20260112-000001 - pytest fallback to unittest (resolved)
 
 # Memory (lessons with reinforcement tracking)
@@ -178,6 +186,10 @@ memory:
     lesson: "Replace bare 'except: pass' with EDGE_DEBUG-gated stderr logging - preserves 'don't crash' while enabling diagnostics"
     reinforced: 1
     last_used: "2026-01-20"
+  - trigger: "hook duplication + global vs project"
+    lesson: "Claude Code runs hooks from BOTH global (~/.claude) and project-level (.claude) settings - duplicate matchers cause double execution"
+    reinforced: 1
+    last_used: "2026-01-21"
 
 
 # Self-assessment

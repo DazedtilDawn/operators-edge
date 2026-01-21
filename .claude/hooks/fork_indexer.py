@@ -151,7 +151,8 @@ def clean_message_content(text: str) -> str:
     - <system-reminder> blocks
     - Hook output (lines starting with ===, ---, etc.)
     - Command prefixes (/edge-*, etc.)
-    - Very long code blocks
+    - System prompts (==You are a Claude agent...)
+    - [GEAR] template text
 
     Args:
         text: Raw message content
@@ -169,6 +170,13 @@ def clean_message_content(text: str) -> str:
 
     # Remove <command-message> and <command-name> blocks
     text = re.sub(r'<command-\w+>.*?</command-\w+>', '', text, flags=re.DOTALL)
+
+    # Remove system prompt leakage (==You are a Claude agent...)
+    text = re.sub(r'^==You are a Claude agent.*?(?=\n\n|\Z)', '', text, flags=re.DOTALL | re.MULTILINE)
+
+    # Remove [GEAR] template blocks
+    text = re.sub(r'\[GEAR\][^\n]*\n?', '', text)
+    text = re.sub(r'\[PATROL\][^\n]*\n?', '', text)
 
     # Remove hook output blocks (=== lines, --- lines, status blocks)
     lines = text.split('\n')
@@ -305,19 +313,46 @@ def extract_objective(messages: List[Dict]) -> Optional[str]:
     return first_msg[:200] if first_msg else None
 
 
-def extract_summary(messages: List[Dict], max_user_messages: int = 3) -> str:
+def extract_tool_names(messages: List[Dict]) -> List[str]:
+    """
+    Extract unique tool names used in a session.
+
+    This helps identify what kind of work was done (e.g., mcp__codex, Edit, Bash).
+    """
+    tools = set()
+    for msg in messages:
+        # Check assistant messages for tool_use
+        if msg.get("type") == "assistant":
+            nested_msg = msg.get("message", {})
+            content = nested_msg.get("content", [])
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        tool_name = block.get("name", "")
+                        if tool_name:
+                            # Normalize MCP tool names
+                            if tool_name.startswith("mcp__"):
+                                # Keep first two parts: mcp__codex__codex -> mcp__codex
+                                parts = tool_name.split("__")
+                                tool_name = "__".join(parts[:2]) if len(parts) > 2 else tool_name
+                            tools.add(tool_name)
+    return sorted(tools)
+
+
+def extract_summary(messages: List[Dict], max_user_messages: int = 6) -> str:
     """
     Build embeddable summary text from session messages.
 
-    v1.1: Uses cleaned messages with system noise removed.
+    v1.2: Samples from beginning, middle, and end of session to capture full scope.
 
     Combines:
     - Extracted objective (cleaned)
-    - First N user messages (cleaned, non-empty)
+    - User messages from start, middle, and end of session
+    - Tool names used (to identify type of work)
 
     Args:
         messages: Parsed message list
-        max_user_messages: Max user messages to include (default: 3)
+        max_user_messages: Max user messages to include (default: 6)
 
     Returns:
         Summary text suitable for embedding
@@ -332,21 +367,57 @@ def extract_summary(messages: List[Dict], max_user_messages: int = 3) -> str:
         if cleaned_objective:
             parts.append(f"Objective: {cleaned_objective}")
 
-    # Get first N cleaned user messages (skip empty after cleaning)
+    # Get ALL cleaned user messages
     user_messages = extract_user_messages(messages, clean=True)
 
     # Filter to non-trivial messages (more than just whitespace or short commands)
-    # Threshold of 10 chars catches real noise while keeping short legitimate messages
     meaningful_messages = [
         msg for msg in user_messages
         if len(msg.strip()) > 10 and not msg.strip().startswith('/')
-    ][:max_user_messages]
+    ]
 
-    if meaningful_messages:
+    # Sample from beginning, middle, and end to capture full session scope
+    sampled_messages = []
+    n = len(meaningful_messages)
+    if n > 0:
+        # Allocation: 2 from start, 2 from middle, 2 from end (adjusts for smaller sessions)
+        per_section = max(1, max_user_messages // 3)
+
+        # Start section
+        start_msgs = meaningful_messages[:per_section]
+        sampled_messages.extend(start_msgs)
+
+        # Middle section (if session is long enough)
+        if n > per_section * 2:
+            mid_start = n // 3
+            mid_msgs = meaningful_messages[mid_start:mid_start + per_section]
+            sampled_messages.extend(mid_msgs)
+
+        # End section (if session is long enough)
+        if n > per_section:
+            end_msgs = meaningful_messages[-per_section:]
+            # Avoid duplicates with start section
+            for msg in end_msgs:
+                if msg not in sampled_messages:
+                    sampled_messages.append(msg)
+
+    # Add tool names EARLY to help identify type of work (gives more embedding weight)
+    tools = extract_tool_names(messages)
+    if tools:
+        # Filter to interesting tools (skip common ones like Read, Glob)
+        interesting_tools = [t for t in tools if t.startswith("mcp__") or t in ("Edit", "Write", "Bash")]
+        if interesting_tools:
+            # Put MCP tools first (most specific)
+            mcp_tools = [t for t in interesting_tools if t.startswith("mcp__")]
+            other_tools = [t for t in interesting_tools if not t.startswith("mcp__")]
+            ordered_tools = mcp_tools + other_tools
+            parts.append(f"Tools used: {', '.join(ordered_tools[:10])}")
+
+    if sampled_messages:
         parts.append("User intent:")
-        for i, msg in enumerate(meaningful_messages, 1):
+        for i, msg in enumerate(sampled_messages[:max_user_messages], 1):
             # Truncate long messages but keep more context
-            truncated = msg[:500] if len(msg) > 500 else msg
+            truncated = msg[:400] if len(msg) > 400 else msg
             parts.append(f"{i}. {truncated}")
 
     return "\n".join(parts)
@@ -392,19 +463,29 @@ def get_session_metadata(path: Path, messages: List[Dict]) -> Dict[str, Any]:
     }
 
 
-def _process_session_file(path: Path, project_name: str) -> Optional[Dict[str, Any]]:
+def _process_session_file(
+    path: Path,
+    project_name: str,
+    min_messages: int = 3
+) -> Optional[Dict[str, Any]]:
     """
     Process a single session file into metadata and summary.
 
     Args:
         path: Path to session JSONL file
         project_name: Project name to include in metadata
+        min_messages: Minimum messages required (filters empty warmups)
 
     Returns:
-        Dict with session metadata and summary, or None if parsing fails
+        Dict with session metadata and summary, or None if parsing fails or too few messages
     """
     messages = parse_session_jsonl(path)
     if not messages:
+        return None
+
+    # Skip truly empty sessions (warmups, failed starts)
+    # Lowered to 3 to capture more legitimate sessions
+    if len(messages) < min_messages:
         return None
 
     metadata = get_session_metadata(path, messages)
@@ -500,7 +581,7 @@ def scan_sessions(
 
 
 def build_index(
-    max_sessions: int = 100,
+    max_sessions: int = 50000,
     force_rebuild: bool = False,
     all_projects: bool = False
 ) -> Tuple[int, int, List[str]]:
@@ -508,7 +589,7 @@ def build_index(
     Build or update the embedding index.
 
     Args:
-        max_sessions: Maximum sessions to index
+        max_sessions: Maximum sessions to index (default 50000 - effectively all)
         force_rebuild: If True, rebuild from scratch
         all_projects: If True, index all projects (cross-project)
 

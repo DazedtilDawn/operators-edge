@@ -383,6 +383,34 @@ CONFIGURATION:
 """ + handle_status()
 
 
+def extract_user_prompt(raw_input: str) -> str:
+    """
+    Extract the user prompt from hook input.
+
+    Hook input can be:
+    1. Raw JSON from Claude Code: {"session_id": "...", "prompt": "actual message"}
+    2. Plain text (direct invocation): "/edge-fork 'query'"
+
+    Returns:
+        The extracted user prompt, clean of metadata.
+    """
+    raw_input = raw_input.strip()
+
+    # Try to parse as JSON (Claude Code hook format)
+    if raw_input.startswith('{'):
+        try:
+            data = json.loads(raw_input)
+            # Extract just the prompt field
+            prompt = data.get("prompt", "")
+            if isinstance(prompt, str):
+                return prompt.strip()
+        except json.JSONDecodeError:
+            pass  # Fall through to treat as plain text
+
+    # Already plain text
+    return raw_input
+
+
 def parse_args(user_input: str) -> Tuple[str, Optional[str], bool]:
     """
     Parse /edge-fork command arguments.
@@ -391,6 +419,9 @@ def parse_args(user_input: str) -> Tuple[str, Optional[str], bool]:
         Tuple of (command, argument, all_projects)
         Commands: 'help', 'status', 'index', 'search', 'session'
     """
+    # Extract user prompt from potential JSON wrapper
+    user_input = extract_user_prompt(user_input)
+
     # Remove /edge-fork prefix
     text = user_input.strip()
     for prefix in ["/edge-fork", "edge-fork"]:

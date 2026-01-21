@@ -188,17 +188,18 @@ class TestExtractSummary(unittest.TestCase):
         self.assertIn("Second message", summary)
 
     def test_summary_respects_max_messages(self):
-        """Summary respects max_user_messages limit."""
+        """Summary respects max_user_messages limit and samples from full session."""
         # Use longer messages to avoid being filtered by minimum length
         messages = [
             {"type": "human", "content": f"User request number {i} with details"}
             for i in range(10)
         ]
 
+        # v1.2: Now samples from beginning, middle, and end
         summary = extract_summary(messages, max_user_messages=3)
-        self.assertIn("number 0", summary)
-        self.assertIn("number 2", summary)
-        self.assertNotIn("number 5", summary)
+        self.assertIn("number 0", summary)  # From start
+        self.assertIn("number 3", summary)  # From middle (10 // 3 = 3)
+        self.assertIn("number 9", summary)  # From end
 
 
 class TestGetSessionMetadata(unittest.TestCase):
@@ -263,13 +264,18 @@ class TestScanSessions(unittest.TestCase):
         import shutil
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
+    def _create_session_file(self, path: Path, num_messages: int = 6):
+        """Create a session file with enough messages to pass min_messages filter."""
+        with open(path, "w") as f:
+            for i in range(num_messages):
+                f.write(f'{{"type": "human", "content": "Message {i}"}}\n')
+
     def test_scan_finds_jsonl_files(self):
         """Scan finds .jsonl session files."""
-        # Create test session files
+        # Create test session files with enough messages (min_messages=5 default)
         for i in range(3):
             path = Path(self.temp_dir) / f"session{i}.jsonl"
-            with open(path, "w") as f:
-                f.write('{"type": "human", "content": "Test"}\n')
+            self._create_session_file(path, num_messages=6)
 
         sessions = list(scan_sessions(sessions_dir=Path(self.temp_dir)))
         self.assertEqual(len(sessions), 3)
@@ -278,19 +284,23 @@ class TestScanSessions(unittest.TestCase):
         """Scan respects max_sessions limit."""
         for i in range(10):
             path = Path(self.temp_dir) / f"session{i}.jsonl"
-            with open(path, "w") as f:
-                f.write('{"type": "human", "content": "Test"}\n')
+            self._create_session_file(path, num_messages=6)
 
         sessions = list(scan_sessions(max_sessions=5, sessions_dir=Path(self.temp_dir)))
         self.assertEqual(len(sessions), 5)
 
     def test_scan_skips_empty_files(self):
-        """Scan skips files with no messages."""
-        # Create one valid and one empty file
+        """Scan skips files with no messages or too few messages."""
+        # Create one valid file with enough messages
         valid = Path(self.temp_dir) / "valid.jsonl"
-        with open(valid, "w") as f:
+        self._create_session_file(valid, num_messages=6)
+
+        # Create a file with too few messages (should be skipped)
+        too_few = Path(self.temp_dir) / "toofew.jsonl"
+        with open(too_few, "w") as f:
             f.write('{"type": "human", "content": "Test"}\n')
 
+        # Create an empty file (should be skipped)
         empty = Path(self.temp_dir) / "empty.jsonl"
         empty.touch()
 
@@ -312,12 +322,17 @@ class TestBuildIndex(unittest.TestCase):
         import shutil
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
+    def _create_session_file(self, path: Path, num_messages: int = 6):
+        """Create a session file with enough messages to pass min_messages filter."""
+        with open(path, "w") as f:
+            for i in range(num_messages):
+                f.write(f'{{"type": "human", "content": "Build a web app - message {i}"}}\n')
+
     def test_build_index_success(self):
         """Index is built successfully with mocked embeddings."""
-        # Create test session
+        # Create test session with enough messages
         session_path = self.sessions_dir / "test123.jsonl"
-        with open(session_path, "w") as f:
-            f.write('{"type": "human", "content": "Build a web app"}\n')
+        self._create_session_file(session_path, num_messages=6)
 
         # Mock the embedding generation and directory functions
         with patch("fork_indexer.generate_embedding", return_value=[0.1, 0.2, 0.3]):
@@ -331,8 +346,7 @@ class TestBuildIndex(unittest.TestCase):
     def test_build_index_skips_on_embedding_failure(self):
         """Sessions are skipped when embedding fails."""
         session_path = self.sessions_dir / "test.jsonl"
-        with open(session_path, "w") as f:
-            f.write('{"type": "human", "content": "Test"}\n')
+        self._create_session_file(session_path, num_messages=6)
 
         with patch("fork_indexer.generate_embedding", return_value=None):
             with patch("fork_indexer.get_claude_sessions_dir", return_value=self.sessions_dir):
