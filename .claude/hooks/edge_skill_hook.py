@@ -73,11 +73,11 @@ def parse_edge_args(user_input: str) -> dict:
 
     after_edge = user_input[idx + 5:].strip()
 
-    # Check for subcommands
+    # Check for subcommands like /edge-plan, /edge-step
     if after_edge.startswith("-"):
-        # This is a subcommand like /edge-plan, /edge-step
-        # Let those be handled by their own skills
-        return {"command": "subcommand", "args": after_edge}
+        subcommand = after_edge[1:].split()[0].lower()  # e.g., "-plan" → "plan"
+        rest = after_edge[1 + len(subcommand):].strip()
+        return {"command": "subcommand", "args": subcommand, "rest": rest}
 
     # Parse first word as command
     parts = after_edge.split(None, 1)
@@ -874,6 +874,88 @@ def handle_run(args: str = "") -> str:
         return handle_active_mode(state)
 
 
+def handle_subcommand(subcommand: str, rest: str = "") -> str:
+    """
+    Handle /edge-<subcommand> by invoking the corresponding skill.
+
+    Instead of exiting and expecting Claude Code to find the skill,
+    we read the skill file and output its content directly.
+    This ensures /edge-plan, /edge-step, etc. work correctly.
+
+    Args:
+        subcommand: The subcommand name (e.g., "plan", "step", "verify")
+        rest: Any additional arguments after the subcommand
+
+    Returns:
+        The skill content or error message
+    """
+    project_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", "."))
+
+    # Look for the skill file in .claude/commands/
+    skill_file = project_dir / ".claude" / "commands" / f"edge-{subcommand}.md"
+
+    if not skill_file.exists():
+        # Try without "edge-" prefix
+        skill_file = project_dir / ".claude" / "commands" / f"{subcommand}.md"
+
+    if not skill_file.exists():
+        # Unknown subcommand - suggest alternatives
+        return "\n".join([
+            "=" * 70,
+            f"OPERATOR'S EDGE - Unknown subcommand: /edge-{subcommand}",
+            "=" * 70,
+            "",
+            "Available subcommands:",
+            "  /edge-plan     - Get planning assistance",
+            "  /edge-step     - Execute current step",
+            "  /edge-verify   - Run quality checks",
+            "  /edge-review   - Self-review code changes",
+            "  /edge-prune    - Archive completed work",
+            "  /edge-fork     - Search and fork past sessions",
+            "  /edge-yolo     - Enable/disable autopilot",
+            "",
+            "Or use the unified syntax:",
+            "  /edge plan     - Set mode to PLAN",
+            "  /edge active   - Set mode to ACTIVE",
+            "  /edge review   - Set mode to REVIEW",
+            "  /edge done     - Set mode to DONE",
+            "",
+            "=" * 70,
+        ])
+
+    # Read and output the skill content
+    try:
+        skill_content = skill_file.read_text()
+
+        # Add header and any arguments
+        lines = [
+            "=" * 70,
+            f"OPERATOR'S EDGE - /edge-{subcommand}",
+            "=" * 70,
+            "",
+        ]
+
+        if rest:
+            lines.extend([
+                f"Arguments: {rest}",
+                "",
+            ])
+
+        lines.extend([
+            "-" * 70,
+            "SKILL INSTRUCTIONS (from edge-{}.md):".format(subcommand),
+            "-" * 70,
+            "",
+            skill_content,
+            "",
+            "=" * 70,
+        ])
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"[ERROR] Failed to read skill file: {e}"
+
+
 def handle_new_objective(objective_text: str) -> str:
     """Handle /edge "objective" - set new objective and enter planning.
 
@@ -1037,10 +1119,11 @@ def main():
     command = parsed["command"]
     args = parsed["args"]
 
-    # Handle subcommands (let their skills handle them)
+    # Handle subcommands by invoking skill content directly
     if command == "subcommand":
-        # Don't interfere with /edge-plan, /edge-step, etc.
-        sys.exit(0)
+        rest = parsed.get("rest", "")
+        print(handle_subcommand(args, rest))
+        return
 
     # Route to appropriate handler
     if command == "status":
